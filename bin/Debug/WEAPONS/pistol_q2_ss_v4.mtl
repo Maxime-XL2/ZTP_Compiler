@@ -1,0 +1,585 @@
+# Blender MTL File: 'pistol_q2_ss_v3.blend'
+# Material Count: 53
+
+newmtl 10_pistol_clut2
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/10_pistol_clut2.tga
+
+newmtl 11_pistol_hand_clut3
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/11_pistol_hand_clut3.tga
+
+newmtl 12_pistol_hand_clut3_tris_bake
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/12_pistol_hand_clut3_tris_bake.tga
+
+newmtl 13_pistol_hand_clut3
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/13_pistol_hand_clut3.tga
+
+newmtl 14_pistol_hand_clut3
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/14_pistol_hand_clut3.tga
+
+newmtl 14_pistol_hand_clut3_001
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/14_pistol_hand_clut3_001.tga
+
+newmtl 15_pistol_hand_clut3
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/15_pistol_hand_clut3.tga
+
+newmtl 16_pistol_hand_clut3
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/16_pistol_hand_clut3.tga
+
+newmtl 17_pistol_hand_clut3
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/17_pistol_hand_clut3.tga
+
+newmtl 18_pistol_hand_clut3
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/18_pistol_hand_clut3.tga
+
+newmtl 19_pistol_hand_clut3
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/19_pistol_hand_clut3.tga
+
+newmtl 1_pistol_clut1
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/1_pistol_clut1.tga
+
+newmtl 20_pistol_hand_clut3
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/20_pistol_hand_clut3.tga
+
+newmtl 21_pistol_hand_clut3
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/21_pistol_hand_clut3.tga
+
+newmtl 25_pistol_clut4
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/25_pistol_clut4.tga
+
+newmtl 26_pistol_clut4
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/26_pistol_clut4.tga
+
+newmtl 27_pistol_clut4
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/27_pistol_clut4.tga
+
+newmtl 28_pistol_clut5
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/28_pistol_clut5.tga
+
+newmtl 29_pistol_clut5
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/29_pistol_clut5.tga
+
+newmtl 2_pistol_clut1
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/2_pistol_clut1.tga
+
+newmtl 30_pistol_clut6
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/30_pistol_clut6.tga
+
+newmtl 31_pistol_clut6
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/31_pistol_clut6.tga
+
+newmtl 32_pistol_clut6
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/32_pistol_clut6.tga
+
+newmtl 33_pistol_clut6
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/33_pistol_clut6.tga
+
+newmtl 34_pistol_clut7
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/34_pistol_clut7.tga
+
+newmtl 35_pistol_clut7
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/35_pistol_clut7.tga
+
+newmtl 36_pistol_clut7
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/36_pistol_clut7.tga
+
+newmtl 37_pistol_clut7
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/37_pistol_clut7.tga
+
+newmtl 38_pistol_clut7
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/38_pistol_clut7.tga
+
+newmtl 39_pistol_clut7
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/39_pistol_clut7.tga
+
+newmtl 3_pistol_clut2
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/3_pistol_clut2.tga
+
+newmtl 40_pistol_clut7
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/40_pistol_clut7.tga
+
+newmtl 41_pistol_clut7
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/41_pistol_clut7.tga
+
+newmtl 42_pistol_clut7
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/42_pistol_clut7.tga
+
+newmtl 43_pistol_clut7
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/43_pistol_clut7.tga
+
+newmtl 44_pistol_clut7
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/44_pistol_clut7.tga
+
+newmtl 45_pistol_clut7
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/45_pistol_clut7.tga
+
+newmtl 46_pistol_clut7
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/46_pistol_clut7.tga
+
+newmtl 47_pistol_clut8
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/47_pistol_clut8.tga
+
+newmtl 49_pistol_clut8
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/49_pistol_clut8.tga
+
+newmtl 4_pistol_clut1
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/4_pistol_clut1.tga
+
+newmtl 50_pistol_clut8
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/50_pistol_clut8.tga
+
+newmtl 51_pistol_clut8
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/51_pistol_clut8.tga
+
+newmtl 55_pistol_hand_clut3_tris
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/55_pistol_hand_clut3_tris.tga
+
+newmtl 56_pistol_hand_clut3
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/56_pistol_hand_clut3.tga
+
+newmtl 58_pistol_hand_clut3
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/58_pistol_hand_clut3.tga
+
+newmtl 59_pistol_hand_clut3
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/59_pistol_hand_clut3.tga
+
+newmtl 5_pistol_hand_clut3
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/5_pistol_hand_clut3.tga
+
+newmtl 60_pistol_hand_clut3
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/60_pistol_hand_clut3.tga
+
+newmtl 6_pistol_clut1
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/6_pistol_clut1.tga
+
+newmtl 7_pistol_clut1
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/7_pistol_clut1.tga
+
+newmtl 8_pistol_clut1
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/8_pistol_clut1.tga
+
+newmtl 9_pistol_clut2
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd /home/david/Descargas/XL2/Q2_psx/export_noesisv441/pistol_q2_ss/9_pistol_clut2.tga

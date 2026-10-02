@@ -1,0 +1,2 @@
+ZTP_Compiler.exe 0 0 12 0 1 WEAPONS/ SHOTGUN
+PAUSE

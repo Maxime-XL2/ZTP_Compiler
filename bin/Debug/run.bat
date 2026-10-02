@@ -1,0 +1,34 @@
+ZTP_Compiler.exe 0 0 1 0 1 OBJECTS/ BCARD 0
+PAUSE
+ZTP_Compiler.exe 40 0 1 1 1 UNREAL/ BIRD 0
+PAUSE
+ZTP_Compiler.exe 0 0 2 1 1 UNREAL/ TREE1M 1
+ZTP_Compiler.exe 0 0 1 1 1 UNREAL/ NALI 0
+ZTP_Compiler.exe 0 0 6 0 1 ZSOLDIER/ GIBHEAD 1
+ZTP_Compiler.exe 0 0 4 0 1 ZSOLDIER/ GIBARM 1
+ZTP_Compiler.exe 40 0 4 1 1 GOON/ GOON 1
+ZTP_Compiler.exe 0 0 4 1 1 GOON/ GOON2 1
+ZTP_Compiler.exe 0 0 4 1 1 GOON/ GOON3 1
+ZTP_Compiler.exe 10 0 2 0 1 PONEY/ PONEY 1
+ZTP_Compiler.exe 250 0 75 1 1 UNREAL/ SKAARJW
+ZTP_Compiler.exe 0 0 2 1 1 UNREAL/ TREE1M 1
+ZTP_Compiler.exe 0 0 1 1 1 UNREAL/ PISTOL 1
+ZTP_Compiler.exe 0 0 1 1 1 UNREAL/ AUTOMAG 1
+ZTP_Compiler.exe 0 0 1 1 1 UNREAL/ HEALTHM 1
+ZTP_Compiler.exe 0 0 1 1 1 UNREAL/ FLAK 1
+ZTP_Compiler.exe 0 0 12 0 1 WEAPONS/ GRENADE 1
+ZTP_Compiler.exe 0 0 12 0 1 WEAPONS/ FLAME 1
+ZTP_Compiler.exe 0 0 12 0 1 WEAPONS/ STAFF 1
+ZTP_Compiler.exe 25 0 20 1 1 FLAG/ FLAG
+ZTP_Compiler.exe 0 0 1.5 1 1 UNREAL/ ARMORM 0
+ZTP_Compiler.exe 0 0 1 0 1 OBJECTS/ HELLDMG
+ZTP_Compiler.exe 10 0 8 0 1 OBJECTS/ TORCH 1
+ZTP_Compiler.exe 0 0 12 0 1 OBJECTS/ BCARD 1
+ZTP_Compiler.exe 0 0 1 0 1 OBJECTS/ POT 1
+ZTP_Compiler.exe 0 0 12 0 1 OBJECTS/ AMMOBOX 1
+ZTP_Compiler.exe 0 0 1 1 1 UNREAL/ DISTPIST 0
+ZTP_Compiler.exe 0 0 1 0 1 WEAPONS/ PSHOT
+ZTP_Compiler.exe 0 0 12 0 1 WEAPONS/ PBOMB 1
+ZTP_Compiler.exe 0 0 12 0 1 WEAPONS/ PFLAME 1
+ZTP_Compiler.exe 0 0 12 0 1 WEAPONS/ PSTAFF 1
+PAUSE

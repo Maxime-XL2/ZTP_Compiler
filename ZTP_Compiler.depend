@@ -1,0 +1,235 @@
+# depslib dependency file v1.0
+1643061122 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\opengl\init.cpp
+	"../COMMON.H"
+	"ASCII.h"
+
+1664634512 d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\common.h
+	<windows.h>
+	<gl/gl.h>
+	<GL/glu.h>
+	<iostream>
+	<fstream>
+	<string>
+	<sstream>
+	<math.h>
+	"ZTP/lodepng.h"
+	"ZTE/saturnDef.h"
+	"ZTE/MATH/matrix.h"
+
+1664810965 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\opengl\render.cpp
+	"../COMMON.H"
+
+1664652367 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\main.cpp
+	"SRC/COMMON.H"
+
+1564670583 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\tools.cpp
+	"../COMMON.H"
+
+1664813362 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\load.cpp
+	"../COMMON.H"
+
+1664819440 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\textures.cpp
+	"../COMMON.H"
+
+1582867926 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\vector.cpp
+	"../COMMON.H"
+
+1664812242 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\controls.cpp
+	"../COMMON.H"
+
+1561559526 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\light.cpp
+	"../COMMON.H"
+
+1664811420 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\writeztp.cpp
+	"../COMMON.H"
+	"anorms.h"
+
+1659112851 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\writeztptext.cpp
+	"../COMMON.H"
+
+1561765463 d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\matrix.h
+
+1561765920 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\matrix.cpp
+	"../COMMON.H"
+
+1584897264 d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\zte\math\matrix.h
+
+1584896122 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\zte\math\matrix.cpp
+	"../../COMMON.H"
+
+1634229284 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\zte\render\render.cpp
+	"../../COMMON.H"
+
+1561775703 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\zte\render\zsort.cpp
+	"../../COMMON.H"
+
+1562079977 d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\zte\saturndef.h
+
+1635536829 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\zte\system\init.cpp
+	"../../COMMON.H"
+
+1528497887 d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\anorms.h
+
+1631240964 source:c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\main.cpp
+	"SRC/COMMON.H"
+
+1582912204 c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\common.h
+	<windows.h>
+	<gl/gl.h>
+	<GL/glu.h>
+	<iostream>
+	<fstream>
+	<string>
+	<sstream>
+	<math.h>
+	"ZTE/saturnDef.h"
+	"ZTE/MATH/matrix.h"
+
+1562079977 c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\zte\saturndef.h
+
+1584897264 c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\zte\math\matrix.h
+
+1566838462 source:c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\opengl\init.cpp
+	"../COMMON.H"
+
+1628624449 source:c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\opengl\render.cpp
+	"../COMMON.H"
+
+1584896122 source:c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\zte\math\matrix.cpp
+	"../../COMMON.H"
+
+1566837962 source:c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\zte\render\render.cpp
+	"../../COMMON.H"
+
+1561775703 source:c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\zte\render\zsort.cpp
+	"../../COMMON.H"
+
+1561776252 source:c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\zte\system\init.cpp
+	"../../COMMON.H"
+
+1582869052 source:c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\controls.cpp
+	"../COMMON.H"
+
+1561559526 source:c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\light.cpp
+	"../COMMON.H"
+
+1631241119 source:c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\load.cpp
+	"../COMMON.H"
+
+1586918539 source:c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\textures.cpp
+	"../COMMON.H"
+
+1564670583 source:c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\tools.cpp
+	"../COMMON.H"
+
+1582867926 source:c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\vector.cpp
+	"../COMMON.H"
+
+1631240896 source:c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\writeztptext.cpp
+	"../COMMON.H"
+
+1586904499 source:c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\writeztp.cpp
+	"../COMMON.H"
+	"anorms.h"
+
+1528497887 c:\users\maxime\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\anorms.h
+
+1635181218 d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\opengl\ascii.h
+
+1648738331 d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\lodepng.h
+	<string.h>
+	<vector>
+	<string>
+	"lodepng.h"
+	<iostream>
+	"lodepng.h"
+
+1648738339 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\new_version\ztp_compiler\src\ztp\lodepng.cpp
+	"lodepng.h"
+	<limits.h>
+	<stdio.h>
+	<stdlib.h>
+
+1675454781 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\main.cpp
+	"SRC/COMMON.H"
+
+1664630912 d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\common.h
+	<windows.h>
+	<gl/gl.h>
+	<GL/glu.h>
+	<iostream>
+	<fstream>
+	<string>
+	<sstream>
+	<math.h>
+	"ZTP/lodepng.h"
+	"ZTE/saturnDef.h"
+	"ZTE/MATH/matrix.h"
+
+1648734731 d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\ztp\lodepng.h
+	<string.h>
+	<vector>
+	<string>
+	"lodepng.h"
+	<iostream>
+	"lodepng.h"
+
+1790798026 d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\zte\saturndef.h
+	<cstdint>
+
+1584893664 d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\zte\math\matrix.h
+
+1643057522 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\opengl\init.cpp
+	"../COMMON.H"
+	"ASCII.h"
+
+1635177618 d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\opengl\ascii.h
+
+1671724347 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\opengl\render.cpp
+	"../COMMON.H"
+
+1584892522 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\zte\math\matrix.cpp
+	"../../COMMON.H"
+
+1634225684 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\zte\render\render.cpp
+	"../../COMMON.H"
+
+1561772103 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\zte\render\zsort.cpp
+	"../../COMMON.H"
+
+1671723133 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\zte\system\init.cpp
+	"../../COMMON.H"
+
+1671722911 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\ztp\controls.cpp
+	"../COMMON.H"
+
+1561555926 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\ztp\light.cpp
+	"../COMMON.H"
+
+1790797937 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\ztp\load.cpp
+	"../COMMON.H"
+
+1648734739 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\ztp\lodepng.cpp
+	"lodepng.h"
+	<limits.h>
+	<stdio.h>
+	<stdlib.h>
+
+1693338579 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\ztp\textures.cpp
+	"../COMMON.H"
+
+1564666983 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\ztp\tools.cpp
+	"../COMMON.H"
+
+1582864326 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\ztp\vector.cpp
+	"../COMMON.H"
+
+1693337926 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\ztp\writeztptext.cpp
+	"../COMMON.H"
+
+1693340428 source:d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\ztp\writeztp.cpp
+	"../COMMON.H"
+	"anorms.h"
+
+1528494287 d:\onedrive\max\onedrive\documents\saturn\model_converter\ztp_converter\ztp_compiler\src\ztp\anorms.h
+

@@ -1,0 +1,14 @@
+{
+    "configurations": [
+        {
+            "name": "MinGW-w64",
+            "includePath": [
+                "${workspaceFolder}/**"
+            ],
+            "compilerPath": "C:/Program Files/CodeBlocks/MinGW/bin/g++.exe",
+            "cppStandard": "gnu++14",
+            "intelliSenseMode": "windows-gcc-x64"
+        }
+    ],
+    "version": 4
+}

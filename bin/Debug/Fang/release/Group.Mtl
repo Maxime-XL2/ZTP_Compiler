@@ -1,0 +1,202 @@
+# Created By Carrara 5.0
+
+newmtl Texture_1
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.533333 0.156863 0
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_1.png
+
+newmtl Texture_0
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.25098 0 0.25098
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_0.png
+
+newmtl Texture_2
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.815686 0.658824 0.470588
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_2.png
+
+newmtl Texture_1_3
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.533333 0.156863 0
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_1.png
+
+newmtl Texture_4
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.784314 0.784314 0.784314
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_4.png
+
+newmtl Texture_0_3_1
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.533333 0.156863 0
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_1.png
+
+newmtl Texture_3
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.062745 0.031373 0.062745
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_3.png
+
+newmtl Texture_2_1
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.062745 0.031373 0.062745
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_3.png
+
+newmtl Texture_0_3
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.784314 0.784314 0.784314
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_4.png
+
+newmtl Texture_0_4
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.533333 0.156863 0
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_1.png
+
+newmtl Texture_1_2
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.784314 0.784314 0.784314
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_4.png
+
+newmtl Texture_2_2
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.784314 0.784314 0.784314
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_4.png
+
+newmtl Texture_0_1
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.784314 0.784314 0.784314
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_4.png
+
+newmtl Texture_0_2
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.533333 0.156863 0
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_1.png
+
+newmtl Texture_1_1
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.784314 0.784314 0.784314
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_4.png
+
+newmtl Color1.001
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.25098 0 0.25098
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_0.png
+
+newmtl Texture_0_5
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.533333 0.156863 0
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_1.png
+
+newmtl Texture_3_1
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.784314 0.784314 0.784314
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_4.png
+
+newmtl Texture_4_1
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.062745 0.031373 0.062745
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_3.png
+
+newmtl Texture_1_1_1
+ Ns 162
+ d 1
+ Ni 0.001
+ illum 2
+ Ka 0.2 0.2 0.2
+ Kd 0.25098 0 0.25098
+ Ks 0.25 0.25 0.25
+ map_Kd Texture_0.png
+

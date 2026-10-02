@@ -1,0 +1,2 @@
+ZTP_Compiler.exe 20 0 50 1 1 UNREAL/ AUTOMAG
+PAUSE

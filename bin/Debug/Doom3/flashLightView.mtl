@@ -1,0 +1,22 @@
+# Blender 4.5.5 LTS MTL File: 'flashLightView.blend'
+# www.blender.org
+
+newmtl models_characters_player_arm2
+Ns 360.000000
+Ka 0.200000 0.200000 0.200000
+Kd 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 3
+
+newmtl models_items_flashlight_flashlight2
+Ns 360.000000
+Ka 0.200000 0.200000 0.200000
+Kd 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 3

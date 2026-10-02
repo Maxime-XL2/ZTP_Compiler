@@ -1,0 +1,2 @@
+ZTP_Compiler.exe 0 0 1 0 1 OBJECTS/ SPHERE
+PAUSE
