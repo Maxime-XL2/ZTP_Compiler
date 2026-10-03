@@ -150,7 +150,7 @@ void mouse_controls(player_t * player, animated_model_t * model)
 
     if (!insideView) return;
 
-    if (leftButtonPressed) {
+    if (leftButtonPressed && !showAutomaticLod) {
             glPushMatrix();
 
             glRotatef(player->ROTATION[X], 1.0f, 0.0f, 0.0f);
@@ -515,7 +515,7 @@ int keyboard_controls(player_t * player, animated_model_t * model)
         activeShading^=1;
     }
 
-    if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) && m_keys['A'].bPressed)
+    if (!showAutomaticLod && (GetAsyncKeyState(VK_CONTROL) & 0x8000) && m_keys['A'].bPressed)
         selectAllSurfaces(model);
 
     /*if (m_keys['U'].bPressed) {
@@ -525,10 +525,10 @@ int keyboard_controls(player_t * player, animated_model_t * model)
 
 
 
-    if (m_keys[9].bPressed && model->model[activeModel].nbPolygon > 0){
+    if (!showAutomaticLod && m_keys[9].bPressed && model->model[activeModel].nbPolygon > 0){
         if (++activeFace >= (int)model->model[activeModel].nbPolygon) activeFace=0;
         selectSurface(model, activeModel, activeFace, false);
-    } else if (m_keys[VK_SHIFT].bPressed && model->model[activeModel].nbPolygon > 0) {
+    } else if (!showAutomaticLod && m_keys[VK_SHIFT].bPressed && model->model[activeModel].nbPolygon > 0) {
         if (--activeFace<0) activeFace=model->model[activeModel].nbPolygon-1;
         selectSurface(model, activeModel, activeFace, false);
     }

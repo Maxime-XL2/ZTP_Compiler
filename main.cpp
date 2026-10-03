@@ -28,6 +28,7 @@ extern void resetAnimationPlaybackTiming();
 extern void setLightOrientation(float azimuthDegrees, float elevationDegrees);
 extern void calcLight(animated_model_t *);
 extern float defLight[3];
+extern HWND hwnd;
 float animationPlaybackSpeed = 1.0f;
 float cameraMovementSpeed = 1.0f;
 
@@ -72,6 +73,11 @@ const int IDC_LIGHT_AZIMUTH_LABEL = 2150;
 const int IDC_LIGHT_AZIMUTH = 2151;
 const int IDC_LIGHT_ELEVATION_LABEL = 2152;
 const int IDC_LIGHT_ELEVATION = 2153;
+const int IDC_LOD_REDUCTION_LABEL = 2160;
+const int IDC_LOD_REDUCTION = 2161;
+const int IDC_LOD_GENERATE = 2162;
+const int IDC_LOD_SHOW = 2163;
+const int IDC_LOD_STATUS = 2164;
 const float animationSpeedValues[] = {0.0f, 0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
 const float cameraSpeedValues[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f, 16.0f};
 
@@ -93,6 +99,11 @@ uint32_t shownSelectionRevision = 0xFFFFFFFFu;
 
 void resetModelAnimation(animated_model_t * model)
 {
+    resetAutomaticLod();
+    CheckDlgButton(hwnd, IDC_LOD_SHOW, BST_UNCHECKED);
+    EnableWindow(GetDlgItem(hwnd, IDC_LOD_SHOW), FALSE);
+    EnableWindow(GetDlgItem(hwnd, IDC_LOD_GENERATE), TRUE);
+    SetDlgItemTextA(hwnd, IDC_LOD_STATUS, "LOD: not generated");
     ZeroMemory(&PLAYER[0].ANIMCTRL, sizeof(PLAYER[0].ANIMCTRL));
     PLAYER[0].ANIMCTRL.fps = 2;
     PLAYER[0].ANIMCTRL.endFrm = model->nbFrames > 0xFFFFu ? 0xFFFFu : static_cast<uint16_t>(model->nbFrames);
@@ -157,6 +168,15 @@ void createSidePanel(HWND parent)
     addControl(parent, TRACKBAR_CLASSA, "", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 0, 0, 10, 10, IDC_LIGHT_AZIMUTH);
     addControl(parent, "STATIC", "Elevation: 0 deg", SS_LEFT, 0, 0, 10, 10, IDC_LIGHT_ELEVATION_LABEL);
     addControl(parent, TRACKBAR_CLASSA, "", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 0, 0, 10, 10, IDC_LIGHT_ELEVATION);
+    addControl(parent, "STATIC", "LOD reduction: 75%", SS_LEFT, 0, 0, 10, 10, IDC_LOD_REDUCTION_LABEL);
+    addControl(parent, TRACKBAR_CLASSA, "", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 0, 0, 10, 10, IDC_LOD_REDUCTION);
+    SendDlgItemMessageA(parent, IDC_LOD_REDUCTION, TBM_SETRANGE, TRUE, MAKELPARAM(0, 99));
+    SendDlgItemMessageA(parent, IDC_LOD_REDUCTION, TBM_SETPOS, TRUE, 75);
+    addControl(parent, "BUTTON", "Generate LOD", BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 10, 10, IDC_LOD_GENERATE);
+    addControl(parent, "BUTTON", "Show LOD", BS_AUTOCHECKBOX | WS_TABSTOP, 0, 0, 10, 10, IDC_LOD_SHOW);
+    addControl(parent, "STATIC", "LOD: not generated", SS_LEFT, 0, 0, 10, 10, IDC_LOD_STATUS);
+    EnableWindow(GetDlgItem(parent, IDC_LOD_SHOW), FALSE);
+    EnableWindow(GetDlgItem(parent, IDC_LOD_GENERATE), FALSE);
     SendDlgItemMessageA(parent, IDC_LIGHT_AZIMUTH, TBM_SETRANGEMIN, FALSE, -360);
     SendDlgItemMessageA(parent, IDC_LIGHT_AZIMUTH, TBM_SETRANGEMAX, FALSE, 360);
     int initialAzimuth = static_cast<int>(std::lround(std::atan2(-defLight[X], -defLight[Z]) / conv));
@@ -187,7 +207,8 @@ void createSidePanel(HWND parent)
         IDC_SURFACE_FLIP, IDC_SURFACE_ROTATE, IDC_SURFACE_SORT, IDC_SORT_STATUS,
         IDC_ANIMATION_SPEED_LABEL, IDC_ANIMATION_SPEED, IDC_CAMERA_SPEED_LABEL, IDC_CAMERA_SPEED,
         IDC_WIREFRAME, IDC_SELF_SHADOWING, IDC_LIGHT_AZIMUTH_LABEL, IDC_LIGHT_AZIMUTH,
-        IDC_LIGHT_ELEVATION_LABEL, IDC_LIGHT_ELEVATION
+        IDC_LIGHT_ELEVATION_LABEL, IDC_LIGHT_ELEVATION,
+        IDC_LOD_REDUCTION_LABEL, IDC_LOD_REDUCTION, IDC_LOD_GENERATE, IDC_LOD_SHOW, IDC_LOD_STATUS
     };
     for (unsigned int i = 0; i < sizeof(controlIds) / sizeof(controlIds[0]); ++i)
         SendDlgItemMessageA(parent, controlIds[i], WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
@@ -202,34 +223,39 @@ void layoutSidePanel(HWND parent)
     struct Placement { int id; int x; int y; int width; int height; };
     const Placement placements[] = {
         {IDC_MODEL_GROUP, 8, 8, width, 116},
-        {IDC_SURFACE_GROUP, 8, 130, width, 402},
+        {IDC_SURFACE_GROUP, 8, 130, width, 334},
         {IDC_OPEN_ANOTHER, 20, 29, width - 24, 28},
         {IDC_CURRENT_FILE, 20, 60, width - 24, 28},
         {IDC_SELECTION_HELP, 20, 91, width - 24, 20},
         {IDC_SURFACE_STATUS, 20, 154, width - 24, 32},
-        {IDC_SURFACE_DOUBLE_SIDED, 20, 191, width - 24, 22},
-        {IDC_SURFACE_UV_DIRECTION, 20, 216, width - 24, 22},
-        {IDC_SURFACE_MESH, 20, 241, width - 24, 22},
-        {IDC_SURFACE_GOURAUD, 20, 266, width - 24, 22},
-        {IDC_SURFACE_LIGHT, 20, 291, width - 24, 22},
-        {IDC_SURFACE_DEPTH, 20, 316, width - 24, 22},
-        {IDC_SURFACE_PALETTE, 20, 341, width - 24, 22},
-        {IDC_SURFACE_NEAR_CLIP, 20, 366, width - 24, 22},
-        {IDC_SURFACE_REALTIME_GOURAUD, 20, 391, width - 24, 22},
-        {IDC_SURFACE_FLIP, 20, 428, (width - 36) / 2, 28},
-        {IDC_SURFACE_ROTATE, 24 + (width - 36) / 2, 428, (width - 36) / 2, 28},
-        {IDC_SURFACE_SORT, 20, 462, width - 24, 28},
-        {IDC_SORT_STATUS, 20, 496, width - 24, 22},
-        {IDC_ANIMATION_SPEED_LABEL, 20, 551, 160, 22},
-        {IDC_ANIMATION_SPEED, 190, 548, width - 194, 200},
-        {IDC_CAMERA_SPEED_LABEL, 20, 591, 160, 22},
-        {IDC_CAMERA_SPEED, 190, 588, width - 194, 200},
-        {IDC_WIREFRAME, 20, 628, 146, 22},
-        {IDC_SELF_SHADOWING, 174, 628, 146, 22},
-        {IDC_LIGHT_AZIMUTH_LABEL, 20, 653, 146, 20},
-        {IDC_LIGHT_AZIMUTH, 20, 674, 146, 26},
-        {IDC_LIGHT_ELEVATION_LABEL, 174, 653, 146, 20},
-        {IDC_LIGHT_ELEVATION, 174, 674, 146, 26}
+        {IDC_SURFACE_DOUBLE_SIDED, 20, 187, width - 24, 20},
+        {IDC_SURFACE_UV_DIRECTION, 20, 208, width - 24, 20},
+        {IDC_SURFACE_MESH, 20, 229, width - 24, 20},
+        {IDC_SURFACE_GOURAUD, 20, 250, width - 24, 20},
+        {IDC_SURFACE_LIGHT, 20, 271, width - 24, 20},
+        {IDC_SURFACE_DEPTH, 20, 292, width - 24, 20},
+        {IDC_SURFACE_PALETTE, 20, 313, width - 24, 20},
+        {IDC_SURFACE_NEAR_CLIP, 20, 334, width - 24, 20},
+        {IDC_SURFACE_REALTIME_GOURAUD, 20, 355, width - 24, 20},
+        {IDC_SURFACE_FLIP, 20, 382, (width - 36) / 2, 24},
+        {IDC_SURFACE_ROTATE, 24 + (width - 36) / 2, 382, (width - 36) / 2, 24},
+        {IDC_SURFACE_SORT, 20, 412, width - 24, 24},
+        {IDC_SORT_STATUS, 20, 440, width - 24, 20},
+        {IDC_ANIMATION_SPEED_LABEL, 20, 475, 160, 22},
+        {IDC_ANIMATION_SPEED, 190, 472, width - 194, 200},
+        {IDC_CAMERA_SPEED_LABEL, 20, 507, 160, 22},
+        {IDC_CAMERA_SPEED, 190, 504, width - 194, 200},
+        {IDC_WIREFRAME, 20, 539, 146, 22},
+        {IDC_SELF_SHADOWING, 174, 539, 146, 22},
+        {IDC_LIGHT_AZIMUTH_LABEL, 20, 563, 146, 20},
+        {IDC_LIGHT_AZIMUTH, 20, 583, 146, 26},
+        {IDC_LIGHT_ELEVATION_LABEL, 174, 563, 146, 20},
+        {IDC_LIGHT_ELEVATION, 174, 583, 146, 26},
+        {IDC_LOD_REDUCTION_LABEL, 20, 614, 146, 22},
+        {IDC_LOD_REDUCTION, 174, 611, 146, 26},
+        {IDC_LOD_GENERATE, 20, 642, 146, 26},
+        {IDC_LOD_SHOW, 174, 642, 146, 26},
+        {IDC_LOD_STATUS, 20, 673, width - 24, 30}
     };
     for (unsigned int i = 0; i < sizeof(placements) / sizeof(placements[0]); ++i)
     {
@@ -509,6 +535,7 @@ HMENU createMainMenu()
 void deleteModels(animated_model_t * model)
 {
     if (!model) return;
+    resetAutomaticLod();
     for (unsigned int i=0; i<model->nbModels; i++) {
         delete [] model->model[i].pltbl;
         delete [] model->model[i].pntbl;
@@ -595,7 +622,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     hwnd = CreateWindowExA(0, "ZTP_CONVERTER", "ZTP Converter",
                            WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_OVERLAPPEDWINDOW,
-                           64, 64, 1360, 760, NULL, createMainMenu(), hInstance, NULL);
+                           64, 64, 1360, 800, NULL, createMainMenu(), hInstance, NULL);
     if (!hwnd) return 0;
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
@@ -749,6 +776,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             if (glReady) resizeOpenGLView(hwnd);
             return 0;
 
+        case WM_GETMINMAXINFO:
+        {
+            RECT minimum = {0, 0, SIDE_PANEL_WIDTH + 320, 710};
+            AdjustWindowRectEx(&minimum, WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_OVERLAPPEDWINDOW, TRUE, 0);
+            MINMAXINFO * limits = reinterpret_cast<MINMAXINFO *>(lParam);
+            limits->ptMinTrackSize.x = minimum.right - minimum.left;
+            limits->ptMinTrackSize.y = minimum.bottom - minimum.top;
+            return 0;
+        }
+
         case WM_RBUTTONDOWN:
         {
             RECT client;
@@ -792,6 +829,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         case WM_HSCROLL:
         {
             HWND slider = reinterpret_cast<HWND>(lParam);
+            if (slider && slider == GetDlgItem(hwnd, IDC_LOD_REDUCTION))
+            {
+                char label[48];
+                sprintf(label, "LOD reduction: %d%%", static_cast<int>(SendMessageA(slider, TBM_GETPOS, 0, 0)));
+                SetDlgItemTextA(hwnd, IDC_LOD_REDUCTION_LABEL, label);
+                return 0;
+            }
             if (slider && (slider == GetDlgItem(hwnd, IDC_LIGHT_AZIMUTH) ||
                            slider == GetDlgItem(hwnd, IDC_LIGHT_ELEVATION)))
             {
@@ -845,6 +889,45 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     {
                         enableSelfShadowing = IsDlgButtonChecked(hwnd, IDC_SELF_SHADOWING) == BST_CHECKED;
                         resetSelfShadowing();
+                        SetFocus(hwnd);
+                    }
+                    return 0;
+                case IDC_LOD_GENERATE:
+                    if (HIWORD(wParam) == BN_CLICKED && currentModel)
+                    {
+                        unsigned int reduction = SendDlgItemMessageA(hwnd, IDC_LOD_REDUCTION, TBM_GETPOS, 0, 0);
+                        HCURSOR previousCursor = SetCursor(LoadCursor(NULL, IDC_WAIT));
+                        bool generated = generateAutomaticLod(currentModel, reduction);
+                        SetCursor(previousCursor);
+                        showAutomaticLod = generated;
+                        resetSelfShadowing();
+                        CheckDlgButton(hwnd, IDC_LOD_SHOW, generated ? BST_CHECKED : BST_UNCHECKED);
+                        EnableWindow(GetDlgItem(hwnd, IDC_LOD_SHOW), generated);
+                        unsigned int originalCount = 0;
+                        unsigned int originalPoints = 0;
+                        for (unsigned int mesh = 0; mesh < currentModel->nbModels; ++mesh)
+                        {
+                            originalCount += currentModel->model[mesh].nbPolygon;
+                            originalPoints += currentModel->model[mesh].nbPoint;
+                        }
+                        char status[128];
+                        unsigned int lodCount = automaticLodFaceCount();
+                        if (generated)
+                            sprintf(status, "LOD: %u -> %u faces (-%.0f%%)\r\nPoints: %u -> %u", originalCount, lodCount,
+                                originalCount ? 100.0f * (originalCount - lodCount) / originalCount : 0.0f,
+                                originalPoints, automaticLodPointCount());
+                        else sprintf(status, "LOD generation failed");
+                        SetDlgItemTextA(hwnd, IDC_LOD_STATUS, status);
+                        clearSelectedSurfaces();
+                        SetFocus(hwnd);
+                    }
+                    return 0;
+                case IDC_LOD_SHOW:
+                    if (HIWORD(wParam) == BN_CLICKED)
+                    {
+                        showAutomaticLod = IsDlgButtonChecked(hwnd, IDC_LOD_SHOW) == BST_CHECKED;
+                        resetSelfShadowing();
+                        clearSelectedSurfaces();
                         SetFocus(hwnd);
                     }
                     return 0;

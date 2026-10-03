@@ -166,15 +166,16 @@ void renderLightSource(animated_model_t * model)
     glPopAttrib();
 }
 
-void renderShadow(model_t * m, polygon_t * p) {
+void renderShadow(model_t * m, const polygon_t * p) {
     if (lightDir[Y] <= 0.0001f) return;
     float groundY = m->BoxMax[1];
 
     glDepthMask(GL_FALSE);
-    glBegin(GL_QUADS);
+    bool triangle = p->vertIdx[2] == p->vertIdx[3];
+    glBegin(triangle ? GL_TRIANGLES : GL_QUADS);
     glColor4f(0,0,0,1);
 
-    for (int32_t i=3; i>=0; --i) {
+    for (int32_t i=triangle ? 2 : 3; i>=0; --i) {
         glTexCoord2f(SaturnUV[i*2], (SaturnUV[(i*2) + 1 ]));
         vertex_t * v = &m->pntbl[p->vertIdx[i]];
         float t = (groundY - (float)v->point[1])/lightDir[1];
@@ -212,6 +213,49 @@ void render2D(model_t * m){
     }
     glPopMatrix();
 //glDepthMask(GL_TRUE);
+}
+
+void renderAutomaticLod(animated_model_t * model)
+{
+    glPushAttrib(GL_ENABLE_BIT | GL_CURRENT_BIT | GL_POLYGON_BIT);
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_POLYGON_STIPPLE);
+    glDisable(GL_BLEND);
+    for (unsigned int meshIndex = 0; meshIndex < model->nbModels; ++meshIndex)
+    {
+        unsigned int count = 0;
+        const polygon_t * faces = automaticLodFaces(model, meshIndex, &count);
+        model_t * mesh = &model->model[meshIndex];
+        for (unsigned int faceIndex = 0; faceIndex < count; ++faceIndex)
+        {
+            const polygon_t & face = faces[faceIndex];
+            float normal[3] = {};
+            const float * first = mesh->pntbl[face.vertIdx[0]].point;
+            const float * second = mesh->pntbl[face.vertIdx[1]].point;
+            const float * third = mesh->pntbl[face.vertIdx[2]].point;
+            float edge[3], next[3];
+            for (unsigned int axis = 0; axis < 3; ++axis)
+            {
+                edge[axis] = second[axis] - first[axis];
+                next[axis] = third[axis] - first[axis];
+            }
+            normal[X] = edge[Y] * next[Z] - edge[Z] * next[Y];
+            normal[Y] = edge[Z] * next[X] - edge[X] * next[Z];
+            normal[Z] = edge[X] * next[Y] - edge[Y] * next[X];
+            vectorNormalize(normal);
+            float intensity = 0.35f + 0.65f * std::fabs(normal[X] * lightDir[X] + normal[Y] * lightDir[Y] + normal[Z] * lightDir[Z]);
+            glColor3f(intensity * face.color.r / 255.0f, intensity * face.color.g / 255.0f, intensity * face.color.b / 255.0f);
+            bool triangle = face.vertIdx[2] == face.vertIdx[3];
+            glBegin(triangle ? GL_TRIANGLES : GL_QUADS);
+            for (int corner = triangle ? 2 : 3; corner >= 0; --corner)
+                glVertex3fv(mesh->pntbl[face.vertIdx[corner]].point);
+            glEnd();
+            glColor3f(0.0f, 0.0f, 0.0f);
+            renderShadow(mesh, &face);
+        }
+    }
+    glPopAttrib();
 }
 
 int render(animated_model_t * aModel)
@@ -254,6 +298,13 @@ newUseUV=0;
                 geometryChanged = PLAYER[0].ANIMCTRL.currentFrm != previousFrame;
                 //testAnim+=ZT_FRAMERATE;
                 //if (testAnim >= aModel->nbFrames*playSpeed) testAnim=0;
+            }
+            if (showAutomaticLod)
+            {
+                renderAutomaticLod(aModel);
+                renderLightSource(aModel);
+                glPopMatrix();
+                return 1;
             }
             updateSelfShadowing(aModel, geometryChanged);
             updatePreviewColors(aModel);

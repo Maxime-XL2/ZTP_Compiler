@@ -254,6 +254,12 @@ unsigned int    selectedSurfaceCount();
 uint32_t        surfaceSelectionRevision();
 bool            rayIntersectsPolygon(const float * origin, const float * direction, const model_t * mesh,
                                      const polygon_t * polygon, float minimumDistance);
+void            resetAutomaticLod();
+bool            generateAutomaticLod(animated_model_t * model, unsigned int reductionPercent);
+const polygon_t * automaticLodFaces(const animated_model_t * model, unsigned int meshIndex, unsigned int * count);
+unsigned int    automaticLodFaceCount();
+unsigned int    automaticLodPointCount();
+extern bool     showAutomaticLod;
 void            resetSelfShadowing();
 void            updateSelfShadowing(animated_model_t * model, bool geometryChanged);
 float           selfShadowFactor(unsigned int modelIndex, unsigned int vertexIndex);

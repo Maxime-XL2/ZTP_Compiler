@@ -45,6 +45,8 @@
 			<Add library="gdi32" />
 		</Linker>
 		<Unit filename="SRC/COMMON.H" />
+		<Unit filename="third_party/meshoptimizer/meshoptimizer.h" />
+		<Unit filename="third_party/meshoptimizer/simplifier.cpp" />
 		<Unit filename="SRC/OpenGL/init.cpp" />
 		<Unit filename="SRC/OpenGL/render.cpp" />
 		<Unit filename="SRC/ZTE/MATH/matrix.cpp" />
@@ -53,6 +55,7 @@
 		<Unit filename="SRC/ZTE/saturnDef.h" />
 		<Unit filename="SRC/ZTP/controls.cpp" />
 		<Unit filename="SRC/ZTP/light.cpp" />
+		<Unit filename="SRC/ZTP/lod.cpp" />
 		<Unit filename="SRC/ZTP/load.cpp" />
 		<Unit filename="SRC/ZTP/lodepng.cpp" />
 		<Unit filename="SRC/ZTP/lodepng.h" />
