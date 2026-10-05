@@ -1,7 +1,400 @@
 #include "../COMMON.H"
+#include <algorithm>
 #include <iomanip>
+#include <limits>
 #include <vector>
+#include <array>
+#include <iterator>
+#include <new>
+#include "mtl.h"
 extern int USE_SGL;
+
+namespace
+{
+class ZTPReader
+{
+public:
+    explicit ZTPReader(const std::vector<uint8_t> &data) : data(data), offset(0) {}
+
+    bool readU8(uint8_t &value)
+    {
+        if (remaining() < 1) return false;
+        value = data[offset++];
+        return true;
+    }
+
+    bool readS8(int8_t &value)
+    {
+        uint8_t raw;
+        if (!readU8(raw)) return false;
+        value = raw < 0x80 ? static_cast<int8_t>(raw) : static_cast<int8_t>(static_cast<int>(raw) - 0x100);
+        return true;
+    }
+
+    bool readU16(uint16_t &value)
+    {
+        uint8_t first, second;
+        if (!readU8(first) || !readU8(second)) return false;
+        value = static_cast<uint16_t>((first << 8) | second);
+        return true;
+    }
+
+    bool readU32(uint32_t &value)
+    {
+        uint8_t bytes[4];
+        for (unsigned int index = 0; index < 4; ++index)
+            if (!readU8(bytes[index])) return false;
+        value = (static_cast<uint32_t>(bytes[0]) << 24) | (static_cast<uint32_t>(bytes[1]) << 16) |
+                (static_cast<uint32_t>(bytes[2]) << 8) | bytes[3];
+        return true;
+    }
+
+    bool readS32(int32_t &value)
+    {
+        uint32_t raw;
+        if (!readU32(raw)) return false;
+        const int64_t signedValue = raw & 0x80000000u ? static_cast<int64_t>(raw) - 0x100000000LL : raw;
+        value = static_cast<int32_t>(signedValue);
+        return true;
+    }
+
+    bool readBytes(uint8_t *destination, size_t count)
+    {
+        if (remaining() < count) return false;
+        std::copy(data.begin() + offset, data.begin() + offset + count, destination);
+        offset += count;
+        return true;
+    }
+
+    size_t remaining() const { return data.size() - offset; }
+    size_t position() const { return offset; }
+
+private:
+    const std::vector<uint8_t> &data;
+    size_t offset;
+};
+
+struct ZTPMeshRange
+{
+    uint16_t firstPoint;
+    uint16_t endPoint;
+    uint16_t firstPolygon;
+    uint16_t endPolygon;
+};
+
+void destroyLoadedZTP(animated_model_t *model)
+{
+    if (!model) return;
+    if (model->model)
+        for (unsigned int mesh = 0; mesh < model->nbModels; ++mesh)
+        {
+            delete [] model->model[mesh].pntbl;
+            delete [] model->model[mesh].pltbl;
+        }
+    if (model->keyFrames)
+        for (unsigned int frame = 0; frame < model->nbFrames; ++frame)
+            delete [] model->keyFrames[frame].cVert;
+    if (model->texture)
+        for (unsigned int texture = 0; texture < model->nbTextures; ++texture)
+            delete [] model->texture[texture].pixel;
+    delete [] model->keyFrames;
+    delete [] model->model;
+    delete [] model->texture;
+    delete model;
+}
+
+bool readFixedVector(ZTPReader &reader, float *destination, unsigned int count)
+{
+    for (unsigned int index = 0; index < count; ++index)
+    {
+        int32_t fixed;
+        if (!reader.readS32(fixed)) return false;
+        destination[index] = fixed / 65536.0f;
+    }
+    return true;
+}
+}
+
+animated_model_t * loadZTPFile(const string &filePath)
+{
+    ifstream file(filePath.c_str(), ios::binary);
+    if (!file.is_open()) return NULL;
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (file.bad() || bytes.empty()) return NULL;
+
+    ZTPReader reader(bytes);
+    uint16_t modelCount, textureCount, pointCount, polygonCount, frameCount, frameRate;
+    uint32_t textureBlockSize, reserved;
+    if (!reader.readU16(modelCount) || !reader.readU16(textureCount) || !reader.readU32(textureBlockSize) ||
+        !reader.readU16(pointCount) || !reader.readU16(polygonCount)) return NULL;
+    if (modelCount == 0 || modelCount > 256 || textureCount > 1280 || polygonCount > maxPolygons) return NULL;
+
+    animated_model_t *model = new (std::nothrow) animated_model_t();
+    if (!model) return NULL;
+    model->nbModels = modelCount;
+    model->nbTextures = textureCount;
+    model->model = new (std::nothrow) model_t[modelCount]();
+    model->texture = new (std::nothrow) texture_t[textureCount]();
+    if (!model->model || (textureCount && !model->texture))
+    {
+        destroyLoadedZTP(model);
+        return NULL;
+    }
+
+    if (!readFixedVector(reader, model->BoxMin, XYZ) || !readFixedVector(reader, model->BoxMax, XYZ) ||
+        !readFixedVector(reader, model->scale, XYZ) || !reader.readU16(frameCount) ||
+        !reader.readU16(frameRate) || !reader.readU32(reserved))
+    {
+        destroyLoadedZTP(model);
+        return NULL;
+    }
+    for (unsigned int index = 0; index < 9; ++index)
+        if (!reader.readU32(reserved))
+        {
+            destroyLoadedZTP(model);
+            return NULL;
+        }
+    model->nbFrames = frameCount;
+    model->framerate = frameRate;
+
+    const size_t textureBlockStart = reader.position();
+    std::vector<std::vector<uint8_t> > encodedTextures(textureCount);
+    for (unsigned int textureIndex = 0; textureIndex < textureCount; ++textureIndex)
+    {
+        texture_t &texture = model->texture[textureIndex];
+        uint16_t width, height, depth, paletteSize;
+        if (!reader.readU16(width) || !reader.readU16(height) || !reader.readU16(depth) ||
+            !reader.readU16(paletteSize) || !reader.readU32(reserved) || width == 0 || height == 0 ||
+            static_cast<uint64_t>(width) * height > 16u * 1024u * 1024u ||
+            (depth != COL_16 && depth != COL_32K) ||
+            paletteSize != (depth == COL_16 ? 16 : 0))
+        {
+            destroyLoadedZTP(model);
+            return NULL;
+        }
+        texture.width = width;
+        texture.height = height;
+        texture.colorDepth = depth;
+        texture.textureId = textureIndex;
+        const size_t pixelCount = static_cast<size_t>(width) * height;
+        if (depth == COL_16 && (pixelCount & 1))
+        {
+            destroyLoadedZTP(model);
+            return NULL;
+        }
+        const size_t imageByteCount = depth == COL_32K ? pixelCount * 2 : (pixelCount + 1) / 2;
+        encodedTextures[textureIndex].resize(imageByteCount);
+        if (!reader.readBytes(encodedTextures[textureIndex].data(), imageByteCount))
+        {
+            destroyLoadedZTP(model);
+            return NULL;
+        }
+    }
+
+    for (unsigned int textureIndex = 0; textureIndex < textureCount; ++textureIndex)
+    {
+        texture_t &texture = model->texture[textureIndex];
+        const unsigned int depth = texture.colorDepth;
+        const size_t pixelCount = static_cast<size_t>(texture.width) * texture.height;
+        for (unsigned int color = 0; color < 16; ++color)
+            if (!reader.readU16(texture.clut[color]))
+            {
+                destroyLoadedZTP(model);
+                return NULL;
+            }
+
+        texture.pixel = new (std::nothrow) pixel_t[pixelCount]();
+        if (!texture.pixel)
+        {
+            destroyLoadedZTP(model);
+            return NULL;
+        }
+        for (size_t pixelIndex = 0; pixelIndex < pixelCount; ++pixelIndex)
+        {
+            pixel_t &pixel = texture.pixel[pixelIndex];
+            uint16_t color;
+            if (depth == COL_32K)
+            {
+                color = static_cast<uint16_t>((encodedTextures[textureIndex][pixelIndex * 2] << 8) |
+                                              encodedTextures[textureIndex][pixelIndex * 2 + 1]);
+            }
+            else
+            {
+                const uint8_t packed = encodedTextures[textureIndex][pixelIndex / 2];
+                pixel.palette_idx = (pixelIndex & 1) ? packed & 0x0F : packed >> 4;
+                color = texture.clut[pixel.palette_idx];
+            }
+            pixel.rgb = color;
+            pixel.r = static_cast<uint8_t>((color & 0x1F) * 8);
+            pixel.g = static_cast<uint8_t>(((color >> 5) & 0x1F) * 8);
+            pixel.b = static_cast<uint8_t>(((color >> 10) & 0x1F) * 8);
+            pixel.a = color == 0 ? 0 : 255;
+        }
+    }
+    if (reader.position() - textureBlockStart != textureBlockSize)
+    {
+        destroyLoadedZTP(model);
+        return NULL;
+    }
+
+    std::vector<ZTPMeshRange> ranges(modelCount);
+    uint32_t totalPoints = 0;
+    uint32_t totalPolygons = 0;
+    for (unsigned int mesh = 0; mesh < modelCount; ++mesh)
+    {
+        ZTPMeshRange &range = ranges[mesh];
+        uint16_t lightId, lightDistance;
+        if (!reader.readU16(range.firstPoint) || !reader.readU16(range.endPoint) ||
+            !reader.readU16(range.firstPolygon) || !reader.readU16(range.endPolygon) ||
+            !reader.readU16(lightId) || !reader.readU16(lightDistance) ||
+            range.firstPoint != totalPoints || range.firstPolygon != totalPolygons ||
+            range.endPoint < range.firstPoint || range.endPolygon < range.firstPolygon ||
+            range.endPoint - range.firstPoint > 256)
+        {
+            destroyLoadedZTP(model);
+            return NULL;
+        }
+        totalPoints = range.endPoint;
+        totalPolygons = range.endPolygon;
+        model->model[mesh].nbPoint = range.endPoint - range.firstPoint;
+        model->model[mesh].nbPolygon = range.endPolygon - range.firstPolygon;
+    }
+    if (totalPoints != pointCount || totalPolygons != polygonCount || totalPoints == 0 ||
+        static_cast<uint64_t>(totalPoints) * frameCount > 4u * 1024u * 1024u)
+    {
+        destroyLoadedZTP(model);
+        return NULL;
+    }
+
+    for (unsigned int mesh = 0; mesh < modelCount; ++mesh)
+    {
+        model_t &submodel = model->model[mesh];
+        submodel.pntbl = new (std::nothrow) vertex_t[submodel.nbPoint]();
+        submodel.pltbl = new (std::nothrow) polygon_t[submodel.nbPolygon]();
+        if ((submodel.nbPoint && !submodel.pntbl) || (submodel.nbPolygon && !submodel.pltbl))
+        {
+            destroyLoadedZTP(model);
+            return NULL;
+        }
+        for (unsigned int axis = 0; axis < XYZ; ++axis)
+        {
+            submodel.BoxMin[axis] = std::numeric_limits<float>::max();
+            submodel.BoxMax[axis] = -std::numeric_limits<float>::max();
+        }
+    }
+
+    const auto readPoints = [&](vertex_t *destination) -> bool
+    {
+        for (unsigned int mesh = 0; mesh < modelCount; ++mesh)
+        {
+            model_t &submodel = model->model[mesh];
+            for (unsigned int point = 0; point < submodel.nbPoint; ++point)
+            {
+                vertex_t &vertex = destination ? destination[ranges[mesh].firstPoint + point] : submodel.pntbl[point];
+                for (unsigned int axis = 0; axis < XYZ; ++axis)
+                {
+                    int8_t coordinate;
+                    if (!reader.readS8(coordinate)) return false;
+                    vertex.point[axis] = coordinate;
+                    if (!destination)
+                    {
+                        submodel.BoxMin[axis] = MIN(submodel.BoxMin[axis], vertex.point[axis]);
+                        submodel.BoxMax[axis] = MAX(submodel.BoxMax[axis], vertex.point[axis]);
+                    }
+                }
+                uint8_t normalIndex;
+                if (!reader.readU8(normalIndex)) return false;
+                vertex.normalArray = normalIndex;
+            }
+        }
+        return true;
+    };
+    if (!readPoints(NULL))
+    {
+        destroyLoadedZTP(model);
+        return NULL;
+    }
+
+    model->keyFrames = new (std::nothrow) key_frame_t[frameCount]();
+    if (frameCount && !model->keyFrames)
+    {
+        destroyLoadedZTP(model);
+        return NULL;
+    }
+    for (unsigned int frame = 0; frame < frameCount; ++frame)
+    {
+        model->keyFrames[frame].cVert = new (std::nothrow) vertex_t[totalPoints]();
+        if (!model->keyFrames[frame].cVert || !readPoints(model->keyFrames[frame].cVert))
+        {
+            destroyLoadedZTP(model);
+            return NULL;
+        }
+    }
+
+    for (unsigned int mesh = 0; mesh < modelCount; ++mesh)
+    {
+        model_t &submodel = model->model[mesh];
+        for (unsigned int polygonIndex = 0; polygonIndex < submodel.nbPolygon; ++polygonIndex)
+        {
+            polygon_t &polygon = submodel.pltbl[polygonIndex];
+            for (unsigned int corner = 0; corner < 4; ++corner)
+            {
+                uint8_t globalIndex;
+                if (!reader.readU8(globalIndex))
+                {
+                    destroyLoadedZTP(model);
+                    return NULL;
+                }
+                const unsigned int localIndex = (globalIndex - (ranges[mesh].firstPoint & 0xFF)) & 0xFF;
+                if (localIndex >= submodel.nbPoint)
+                {
+                    destroyLoadedZTP(model);
+                    return NULL;
+                }
+                polygon.vertIdx[corner] = localIndex;
+            }
+            uint16_t textureId, command, attributes, colorNumber;
+            if (!reader.readU16(textureId) || !reader.readU16(command) || !reader.readU16(attributes) ||
+                !reader.readU16(colorNumber) || textureId >= textureCount)
+            {
+                destroyLoadedZTP(model);
+                return NULL;
+            }
+            polygon.texture = textureId;
+            polygon.SGL_ATTR.dir = command & 0x0FFF;
+            polygon.SGL_ATTR.sorting = (command >> 12) & 3;
+            polygon.SGL_ATTR.flag = (command >> 11) & 1;
+            polygon.SGL_ATTR.atrb = attributes;
+            polygon.SGL_ATTR.texno = textureId;
+            polygon.SGL_ATTR.colno = colorNumber;
+            model->texture[textureId].SGL_ATTR.colno = colorNumber;
+        }
+    }
+
+    for (unsigned int mesh = 0; mesh < modelCount; ++mesh)
+    {
+        model_t &submodel = model->model[mesh];
+        for (unsigned int point = 0; point < submodel.nbPoint; ++point)
+            if (!readFixedVector(reader, submodel.pntbl[point].normal, XYZ))
+            {
+                destroyLoadedZTP(model);
+                return NULL;
+            }
+    }
+    for (unsigned int frame = 0; frame < frameCount; ++frame)
+        for (unsigned int mesh = 0; mesh < modelCount; ++mesh)
+            for (unsigned int point = 0; point < model->model[mesh].nbPoint; ++point)
+            {
+                vertex_t &animated = model->keyFrames[frame].cVert[ranges[mesh].firstPoint + point];
+                const vertex_t &base = model->model[mesh].pntbl[point];
+                std::copy(base.normal, base.normal + XYZ, animated.normal);
+                std::copy(base.color, base.color + XYZ, animated.color);
+            }
+
+    extern void calcLight(animated_model_t *);
+    calcLight(model);
+    return model;
+}
 int generate_texture_list(string inString, animated_model_t * model)
 {
     if (inString=="None") return -1;
@@ -16,48 +409,159 @@ int generate_texture_list(string inString, animated_model_t * model)
 }
 
 /**Old implementation, weird code, it works, so who cares?**/
-int sort_faces(string inString, model_t * t_PDATA, polygon_t * bufPol, int index, int total_verts)
+static std::vector<std::vector<unsigned int> > objMeshVertexSources;
+
+static bool resolveOBJIndex(const string &text, size_t count, size_t &index)
 {
-            string f1, f2, f3;
-            char bufferChar[128]={}; //Don't ask, I'm more used to C than C++, so just went "fuck it"....
-            int i = 0;
-            for (i=0; i<128; i++)
+    if (text.empty()) return false;
+    try
+    {
+        size_t parsed = 0;
+        const long long value = std::stoll(text, &parsed);
+        if (parsed != text.size() || value == 0) return false;
+        const long long resolved = value > 0 ? value - 1 : static_cast<long long>(count) + value;
+        if (resolved < 0 || static_cast<unsigned long long>(resolved) >= count) return false;
+        index = static_cast<size_t>(resolved);
+        return true;
+    }
+    catch (const std::exception &)
+    {
+        return false;
+    }
+}
+
+struct OBJFaceVertex
+{
+    size_t position;
+    uv_t uv;
+};
+
+static bool triangulateOBJFace(const vector<OBJFaceVertex> &face,
+                               const vector<vertex_t> &vertices,
+                               vector<std::array<size_t, 3> > &triangles,
+                               bool &convex)
+{
+    if (face.size() < 3) return false;
+
+    double normal[3] = {0, 0, 0};
+    for (size_t corner = 0; corner < face.size(); ++corner)
+    {
+        const float *current = vertices[face[corner].position].point;
+        const float *next = vertices[face[(corner + 1) % face.size()].position].point;
+        normal[0] += (current[Y] - next[Y]) * (current[Z] + next[Z]);
+        normal[1] += (current[Z] - next[Z]) * (current[X] + next[X]);
+        normal[2] += (current[X] - next[X]) * (current[Y] + next[Y]);
+    }
+
+    unsigned int droppedAxis = 0;
+    if (fabs(normal[1]) > fabs(normal[droppedAxis])) droppedAxis = 1;
+    if (fabs(normal[2]) > fabs(normal[droppedAxis])) droppedAxis = 2;
+    if (fabs(normal[droppedAxis]) <= 1e-12) return false;
+
+    vector<std::array<double, 2> > projected(face.size());
+    double coordinateScale = 1.0;
+    for (size_t corner = 0; corner < face.size(); ++corner)
+    {
+        const float *point = vertices[face[corner].position].point;
+        const unsigned int firstAxis = (droppedAxis + 1) % 3;
+        const unsigned int secondAxis = (droppedAxis + 2) % 3;
+        projected[corner][0] = point[firstAxis];
+        projected[corner][1] = point[secondAxis];
+        coordinateScale = MAX(coordinateScale, fabs(projected[corner][0]));
+        coordinateScale = MAX(coordinateScale, fabs(projected[corner][1]));
+    }
+
+    const double epsilon = coordinateScale * coordinateScale * 1e-12;
+    const auto cross = [&](size_t a, size_t b, size_t c) -> double
+    {
+        return (projected[b][0] - projected[a][0]) * (projected[c][1] - projected[a][1]) -
+               (projected[b][1] - projected[a][1]) * (projected[c][0] - projected[a][0]);
+    };
+    double signedArea = 0;
+    for (size_t corner = 0; corner < face.size(); ++corner)
+    {
+        const size_t next = (corner + 1) % face.size();
+        signedArea += projected[corner][0] * projected[next][1] -
+                      projected[corner][1] * projected[next][0];
+    }
+    if (fabs(signedArea) <= epsilon) return false;
+    const double orientation = signedArea > 0 ? 1.0 : -1.0;
+    convex = true;
+    for (size_t corner = 0; corner < face.size(); ++corner)
+    {
+        const size_t previous = (corner + face.size() - 1) % face.size();
+        const size_t next = (corner + 1) % face.size();
+        if (cross(previous, corner, next) * orientation < -epsilon) convex = false;
+    }
+
+    vector<size_t> remaining(face.size());
+    for (size_t corner = 0; corner < face.size(); ++corner) remaining[corner] = corner;
+    while (remaining.size() > 3)
+    {
+        bool clipped = false;
+        for (size_t index = 0; index < remaining.size(); ++index)
+        {
+            const size_t previous = remaining[(index + remaining.size() - 1) % remaining.size()];
+            const size_t current = remaining[index];
+            const size_t next = remaining[(index + 1) % remaining.size()];
+            if (cross(previous, current, next) * orientation <= epsilon) continue;
+
+            bool containsCorner = false;
+            for (size_t candidate : remaining)
             {
-                if (inString[i]=='/') {i++; break;}
-                bufferChar[i]=inString[i];
+                if (candidate == previous || candidate == current || candidate == next) continue;
+                const double first = cross(previous, current, candidate) * orientation;
+                const double second = cross(current, next, candidate) * orientation;
+                const double third = cross(next, previous, candidate) * orientation;
+                if (first >= -epsilon && second >= -epsilon && third >= -epsilon)
+                {
+                    containsCorner = true;
+                    break;
+                }
             }
-            f1 = bufferChar;
-            int charPtr=0;            char bufferChar2[128]={};            f2 = "";
-            for (i=i; i<128; i++)
-            {
-                if (inString[i]=='/') {i++; break;}
-                bufferChar2[charPtr]= inString[i];
-                charPtr++;
-            }
-            f2 = bufferChar2;
-            charPtr=0; char bufferChar3[128]={}; f3 = "";
-            for (i=i; i<128; i++)
-            {
-                if (inString[i]=='/') {i++; break;}
-                bufferChar3[charPtr]=inString[i];
-                charPtr++;
-            }
-            f3=bufferChar3;
+            if (containsCorner) continue;
 
-  int i1, i2, i3;
-  if (f1 != "")     i1 = std::stoi(f1) - 1;
-  else (i1 = 0);
-  if (f2 != "")     i2 = std::stoi(f2) - 1;
-  else (i2 = 0);
-  if (f3 != "")     i3 = std::stoi(f3) - 1;
-  else (i3 = 0);
+            triangles.push_back({{previous, current, next}});
+            remaining.erase(remaining.begin() + index);
+            clipped = true;
+            break;
+        }
+        if (!clipped) return false;
+    }
+    triangles.push_back({{remaining[0], remaining[1], remaining[2]}});
+    return true;
+}
 
+static bool parseOBJFaceVertex(const string &token, size_t vertexCount, size_t texCoordCount,
+                               size_t normalCount, OBJFaceVertex &vertex)
+{
+    const size_t firstSlash = token.find('/');
+    const string positionText = token.substr(0, firstSlash);
+    if (!resolveOBJIndex(positionText, vertexCount, vertex.position)) return false;
+    vertex.uv.U = 0.0f;
+    vertex.uv.V = 0.0f;
 
-  bufPol->vertIdx[index]=i1-total_verts;
-  bufPol->vertUV[index].U = texture_coord[i2].U;
-  bufPol->vertUV[index].V = texture_coord[i2].V;
-
-  return i2;
+    if (firstSlash != string::npos)
+    {
+        const size_t secondSlash = token.find('/', firstSlash + 1);
+        const size_t uvEnd = secondSlash == string::npos ? token.size() : secondSlash;
+        const string uvText = token.substr(firstSlash + 1, uvEnd - firstSlash - 1);
+        if (secondSlash == string::npos && uvText.empty()) return false;
+        if (!uvText.empty())
+        {
+            size_t uvIndex = 0;
+            if (!resolveOBJIndex(uvText, texCoordCount, uvIndex)) return false;
+            vertex.uv = texture_coord[uvIndex];
+        }
+        if (secondSlash != string::npos)
+        {
+            if (token.find('/', secondSlash + 1) != string::npos) return false;
+            const string normalText = token.substr(secondSlash + 1);
+            size_t normalIndex = 0;
+            if (!resolveOBJIndex(normalText, normalCount, normalIndex)) return false;
+        }
+    }
+    return true;
 }
 
 
@@ -99,129 +603,200 @@ if (useUV) return;
 *Main function to read the OBJ file
 *Param : Obj file, upscale value (integer), your model data (_MOD_DATA) and boolean if it's a base model
 *****/
-bool load_OBJ_to_mesh(ifstream *file, float * scalefactor, animated_model_t * aModel, int keyFrameID)
+bool load_OBJ_to_mesh(ifstream *file, float *scalefactor, animated_model_t *aModel, int keyFrameID)
 {
-    string line;
-    tot_tex_coord=0;
-    int pointer = 0;
-    int textpointer = -1;
-    int bufTotalVerts = 0;
-    int MeshPtr = -1;
-
     if (!file->is_open()) return false;
-    file->seekg(pointer, ios::beg);
+    file->clear();
+    file->seekg(0, ios::beg);
 
-    model_t * o_PDATA;
+    string line;
+    vector<vertex_t> sourceVertices;
+    vector<vector<int> > localVertexIndices;
+    size_t normalCount = 0;
+    int textpointer = -1;
+    int meshIndex = -1;
+    tot_tex_coord = 0;
+    if (keyFrameID == -1) objMeshVertexSources.clear();
 
-    while(!file->eof())
+    const auto addSourceVertexToMesh = [&](int targetMesh, size_t sourceIndex) -> bool
     {
-        getline(*file, line);
-        //cout << line << "\n";
-        if (((line[0] == 'o' && line[1] == ' ') || (line[0]== 'g')) && (keyFrameID==-1))
+        vector<int> &localIndices = localVertexIndices[targetMesh];
+        if (sourceIndex >= localIndices.size()) localIndices.resize(sourceIndex + 1, -1);
+        if (localIndices[sourceIndex] >= 0) return true;
+
+        model_t &mesh = aModel->model[targetMesh];
+        if (mesh.nbPoint >= maxPolygons) return false;
+        const unsigned int localIndex = mesh.nbPoint++;
+        mesh.pntbl[localIndex] = sourceVertices[sourceIndex];
+        localIndices[sourceIndex] = static_cast<int>(localIndex);
+        objMeshVertexSources[targetMesh].push_back(static_cast<unsigned int>(sourceIndex));
+        return true;
+    };
+
+    const auto beginMesh = [&](const string &name) -> bool
+    {
+        if (meshIndex >= 255) return false;
+        ++meshIndex;
+        model_t &mesh = aModel->model[meshIndex];
+        mesh.nbPoint = 0;
+        mesh.nbPolygon = 0;
+        mesh.pntbl = new vertex_t[maxPolygons]();
+        mesh.pltbl = new polygon_t[maxPolygons]();
+        localVertexIndices.push_back(vector<int>(sourceVertices.size(), -1));
+        objMeshVertexSources.push_back(vector<unsigned int>());
+        string meshName = name.empty() ? "Default" : name;
+        const size_t copiedNameLength = std::min(meshName.size(), sizeof(mesh.name) - 1);
+        memcpy(mesh.name, meshName.c_str(), copiedNameLength);
+        mesh.name[copiedNameLength] = '\0';
+        cout << "\nMESH NAME : " << meshName << "... Now loading polygons!\n";
+
+        if (meshIndex == 0)
+            for (size_t sourceIndex = 0; sourceIndex < sourceVertices.size(); ++sourceIndex)
+                if (!addSourceVertexToMesh(meshIndex, sourceIndex)) return false;
+        return true;
+    };
+
+    while (getline(*file, line))
+    {
+        line = ztp_mtl::trim(line);
+        if (line.empty() || line[0] == '#') continue;
+        stringstream record(line);
+        string directive;
+        record >> directive;
+
+        if (directive == "v")
         {
-            if (MeshPtr >= 0) bufTotalVerts += aModel->model[MeshPtr].nbPoint;
-            MeshPtr++;
-            aModel->model[MeshPtr].nbPoint=0;
-            aModel->model[MeshPtr].nbPolygon=0;
-            aModel->model[MeshPtr].pntbl = new vertex_t[maxPolygons];
-            aModel->model[MeshPtr].pltbl = new polygon_t[maxPolygons];
-
-            o_PDATA = &aModel->model[MeshPtr];
-            stringstream NameSS(line);            string buffer;            getline(NameSS, buffer, ' ');            NameSS >> buffer;
-            cout << "\nMESH NAME : " << buffer;
-            for (int i = 0; i<128; i++){
-                aModel->model[MeshPtr].name[i] = buffer[i];
-                if (!buffer[i]) break;
-            }
-            cout <<  "... Now loading polygons!\n";
-
+            vertex_t vertex = {};
+            if (!(record >> vertex.point[X] >> vertex.point[Y] >> vertex.point[Z])) return false;
+            for (unsigned int axis = 0; axis < 3; ++axis)
+                vertex.point[axis] *= scalefactor[axis];
+            sourceVertices.push_back(vertex);
+            if (keyFrameID == -1 && meshIndex >= 0 &&
+                !addSourceVertexToMesh(meshIndex, sourceVertices.size() - 1)) return false;
         }
-        else if (line[0] == 'v' && line[1] == ' ')
+        else if (directive == "vt")
         {
-            stringstream PointSS(line);
-            string uselessbuffer;
-            getline(PointSS, uselessbuffer, ' ');
-
-            string sx = ""; string sy = ""; string sz = "";
-            PointSS >> sx >> sy >> sz;
-
-            float fx=std::atof(sx.c_str()); float fy=std::atof(sy.c_str()); float fz=std::atof(sz.c_str());
-
-            if (keyFrameID==-1)
+            uv_t uv = {};
+            if (!(record >> uv.U)) return false;
+            record >> uv.V;
+            if (tot_tex_coord >= maxPolygons * 4) return false;
+            texture_coord[tot_tex_coord++] = uv;
+        }
+        else if (directive == "vn")
+        {
+            float normal[3];
+            if (!(record >> normal[0] >> normal[1] >> normal[2])) return false;
+            ++normalCount;
+        }
+        else if ((directive == "o" || directive == "g") && keyFrameID == -1)
+        {
+            string name;
+            record >> name;
+            if (!beginMesh(name)) return false;
+        }
+        else if (directive == "usemtl" && keyFrameID == -1)
+        {
+            string mtlName;
+            getline(record, mtlName);
+            textpointer = generate_texture_list(ztp_mtl::trim(mtlName), aModel);
+        }
+        else if (directive == "f" && keyFrameID == -1)
+        {
+            if (meshIndex < 0 && !beginMesh("Default")) return false;
+            vector<OBJFaceVertex> face;
+            string token;
+            while (record >> token)
             {
-                o_PDATA->pntbl[o_PDATA->nbPoint].point[X] = fx * scalefactor[X];
-                o_PDATA->pntbl[o_PDATA->nbPoint].point[Y] = fy * scalefactor[Y];
-                o_PDATA->pntbl[o_PDATA->nbPoint].point[Z] = fz * scalefactor[Z];
-                o_PDATA->nbPoint++;
+                if (token[0] == '#') break;
+                OBJFaceVertex vertex = {};
+                if (!parseOBJFaceVertex(token, sourceVertices.size(), tot_tex_coord, normalCount, vertex)) return false;
+                face.push_back(vertex);
+            }
+            if (face.size() < 3) return false;
+
+            vector<unsigned int> localFace;
+            localFace.reserve(face.size());
+            for (const OBJFaceVertex &vertex : face)
+            {
+                if (!addSourceVertexToMesh(meshIndex, vertex.position)) return false;
+                localFace.push_back(static_cast<unsigned int>(localVertexIndices[meshIndex][vertex.position]));
+            }
+
+            model_t &mesh = aModel->model[meshIndex];
+            const auto appendPolygon = [&](const OBJFaceVertex &a, const OBJFaceVertex &b,
+                                           const OBJFaceVertex &c, const OBJFaceVertex &d,
+                                           unsigned int indexA, unsigned int indexB,
+                                           unsigned int indexC, unsigned int indexD) -> bool
+            {
+                if (mesh.nbPolygon >= maxPolygons) return false;
+                polygon_t &polygon = mesh.pltbl[mesh.nbPolygon];
+                polygon = polygon_t();
+                polygon.vertIdx[0] = indexA;
+                polygon.vertIdx[1] = indexB;
+                polygon.vertIdx[2] = indexC;
+                polygon.vertIdx[3] = indexD;
+                polygon.vertUV[0] = a.uv;
+                polygon.vertUV[1] = b.uv;
+                polygon.vertUV[2] = c.uv;
+                polygon.vertUV[3] = d.uv;
+                polygon.texture = textpointer;
+                rotatePolygon(&mesh);
+                ++mesh.nbPolygon;
+                return true;
+            };
+
+            if (face.size() == 3)
+            {
+                if (!appendPolygon(face[2], face[2], face[1], face[0],
+                                   localFace[2], localFace[2], localFace[1], localFace[0])) return false;
             }
             else
             {
-                aModel->keyFrames[keyFrameID].cVert[bufTotalVerts].point[X] = fx * scalefactor[X];
-                aModel->keyFrames[keyFrameID].cVert[bufTotalVerts].point[Y] = fy * scalefactor[Y];
-                aModel->keyFrames[keyFrameID].cVert[bufTotalVerts].point[Z] = fz * scalefactor[Z];
-                bufTotalVerts++;
+                vector<std::array<size_t, 3> > triangles;
+                bool convex = false;
+                if (!triangulateOBJFace(face, sourceVertices, triangles, convex)) return false;
+                if (face.size() == 4 && convex)
+                {
+                    if (!appendPolygon(face[3], face[2], face[1], face[0],
+                                       localFace[3], localFace[2], localFace[1], localFace[0])) return false;
+                    continue;
+                }
+                for (const std::array<size_t, 3> &triangle : triangles)
+                {
+                    const size_t a = triangle[0], b = triangle[1], c = triangle[2];
+                    if (!appendPolygon(face[c], face[b], face[a], face[a],
+                                       localFace[c], localFace[b], localFace[a], localFace[a])) return false;
+                }
             }
-
         }
-        else if (line[0]== 'v' && line[1]== 't') //Texture coordinates...not implemented
+    }
+
+    if (keyFrameID == -1)
+    {
+        if (meshIndex < 0 && !sourceVertices.empty() && !beginMesh("Default")) return false;
+        if (meshIndex < 0) return false;
+        aModel->nbModels = static_cast<unsigned int>(meshIndex + 1);
+        extern void recalculateNormals(model_t *pol);
+        extern void pointNormals(model_t *pol);
+        for (unsigned int index = 0; index < aModel->nbModels; ++index)
         {
-            stringstream TCoord(line);         string bufferStr;
-            getline(TCoord, bufferStr, ' ');
-            string tc0 = "", tc1 = "";
-            TCoord >> tc0 >> tc1;
-            texture_coord[tot_tex_coord].U = std::stof(tc0);
-            texture_coord[tot_tex_coord].V = std::stof(tc1);
-            tot_tex_coord++;
+            recalculateNormals(&aModel->model[index]);
+            pointNormals(&aModel->model[index]);
         }
-        else if ((line[0]=='u' && line[1]=='s' && line[2]=='e' && line[3]=='m' && line[4]=='t' && line[5]=='l')&& (keyFrameID==-1)) //Yeah, I know we all got it after the 2 letters, but just in case some weird Obj format popup...
-        {
-            stringstream MtlSS(line);         string bufferStr;
-            getline(MtlSS, bufferStr, ' ');
-            string mtlName = {""};
-            MtlSS >> mtlName;
-            textpointer=generate_texture_list(mtlName, aModel);
-
-        }
-        else if ((line[0] == 'f' && line[1] == ' ')&& (keyFrameID==-1))
-        {
-            stringstream FaceSS(line);
-            string bufferStr;
-            getline(FaceSS, bufferStr, ' ');
-            string p[4];
-            FaceSS >> p[0] >> p[1] >> p[2] >> p[3];
-            if (p[3]=="") p[3]=p[2];
-
-            polygon_t bufPol;
-            sort_faces(p[3], o_PDATA, &bufPol, 0, bufTotalVerts);
-            sort_faces(p[2], o_PDATA, &bufPol, 1, bufTotalVerts);
-            sort_faces(p[1], o_PDATA, &bufPol, 2, bufTotalVerts);
-            sort_faces(p[0], o_PDATA, &bufPol, 3, bufTotalVerts);
-
-            o_PDATA->pltbl[o_PDATA->nbPolygon]=bufPol;
-            memcpy(&o_PDATA->pltbl[o_PDATA->nbPolygon], &bufPol, sizeof(polygon_t));
-            o_PDATA->pltbl[o_PDATA->nbPolygon].texture = textpointer;
-
-            rotatePolygon(o_PDATA);
-            o_PDATA->nbPolygon++;
-        }
-        pointer++;
+    }
+    else
+    {
+        unsigned int destination = 0;
+        for (size_t mesh = 0; mesh < objMeshVertexSources.size(); ++mesh)
+            for (unsigned int sourceIndex : objMeshVertexSources[mesh])
+            {
+                if (sourceIndex >= sourceVertices.size()) return false;
+                aModel->keyFrames[keyFrameID].cVert[destination++] = sourceVertices[sourceIndex];
+            }
     }
 
     file->clear();
-
-    if (keyFrameID==-1)
-    {
-        extern void recalculateNormals(model_t * pol);
-        extern void pointNormals(model_t * pol);
-        aModel->nbModels=MeshPtr + 1;
-        for (unsigned i = 0; i<aModel->nbModels; i++)
-        {
-            recalculateNormals(&aModel->model[i]);
-            pointNormals(&aModel->model[i]);
-        }
-    }
-
-cout << "...done!\n";
+    cout << "...done!\n";
     return true;
 }
 
@@ -417,7 +992,7 @@ void findScale(animated_model_t * aModel){
 }
 
 string fileOutName;
-void LoadOBJ(string inFolder, string fileIn, float * scalefactor, animated_model_t * aModel)
+void LoadOBJ(string inFolder, string fileIn, float * scalefactor, animated_model_t * aModel, bool readOnly = false)
 {
     cout << "\nNow loading : " << fileIn << "\n";
     string fileInName = inFolder + fileIn + ".obj";
@@ -426,11 +1001,13 @@ void LoadOBJ(string inFolder, string fileIn, float * scalefactor, animated_model
     ifstream file(fileInName, ios::in | ios::ate);
     if (!file.is_open()) {
             cout << "ERROR READING OBJ FILE : " << fileInName << "\n";
+            if (readOnly) return;
             exit(-1);
     }
 
     aModel->nbTextures=0;
     aModel->texture = new texture_t[2048]();
+    const ztp_mtl::MaterialTextures materials = ztp_mtl::load(file, fileInName, cout);
 
    // aModel->model[0].pntbl = new vertex_t[256];
    // aModel->model[0].pltbl = new polygon_t[256];
@@ -439,11 +1016,16 @@ void LoadOBJ(string inFolder, string fileIn, float * scalefactor, animated_model
     else {cout << "\nERROR : Couldn't load Obj\n"; return;}
     file.close();
 
-    extern int ReadTGAFile (string folder, texture_t * texture);
+    extern int ReadTGAFile (string folder, texture_t * texture, string sourcePath = "");
+    const auto loadMaterialTexture = [&](texture_t * texture)
+    {
+        const auto material = materials.find(texture->name);
+        return ReadTGAFile(inFolder, texture, material == materials.end() ? "" : material->second);
+    };
     if (useUV) {
         std::vector<texture_t> sourceTextures(aModel->texture, aModel->texture + aModel->nbTextures);
         for (unsigned int sourceIndex = 0; sourceIndex < sourceTextures.size(); ++sourceIndex)
-            ReadTGAFile(inFolder, &sourceTextures[sourceIndex]);
+            loadMaterialTexture(&sourceTextures[sourceIndex]);
 
         extern void createFakeTexture(texture_t *);
         bool needsFallback = false;
@@ -477,12 +1059,12 @@ void LoadOBJ(string inFolder, string fileIn, float * scalefactor, animated_model
             delete [] sourceTextures[sourceIndex].pixel;
     }
     else {
-        for (unsigned int i=0; i<aModel->nbTextures; i++)    {ReadTGAFile(inFolder, &aModel->texture[i]);}
+        for (unsigned int i=0; i<aModel->nbTextures; i++)    {loadMaterialTexture(&aModel->texture[i]);}
     }
 
 
 
-    if (USE_SGL==2) {
+    if (USE_SGL==2 && !readOnly) {
             cout << USE_SGL << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n0";
         aModel->texture[aModel->nbTextures].name = "PALETTE";
         ReadTGAFile(inFolder, &aModel->texture[aModel->nbTextures]);
@@ -599,7 +1181,7 @@ string fileOutName = "OUT/" + fileIn;
     write_MOD_HEADER("OUT.TXT", aModel);
     binFile.close();
 #else
-fileOutName = /*"OUT/" +*/ fileIn;
+if (!readOnly) fileOutName = /*"OUT/" +*/ fileIn;
 #endif // 0    void write_model_binary(ofstream * file, animated_model_t * aModel);
 
 
@@ -611,7 +1193,7 @@ fileOutName = /*"OUT/" +*/ fileIn;
 
 animated_model_t * loadingConfigured(unsigned int frameCount, int useSgl, float scale,
                                      uint32_t useUv, uint32_t specialOptions,
-                                     string path, string fileName)
+                                     string path, string fileName, bool readOnly = false)
 {
     USE_SGL = useSgl;
     useUV = useUv >= 1 ? 1 : 0;
@@ -627,7 +1209,7 @@ animated_model_t * loadingConfigured(unsigned int frameCount, int useSgl, float 
     ZeroMemory(newModel->model, sizeof(model_t) * 256);
     newModel->keyFrames = new key_frame_t[newModel->nbFrames];
     ZeroMemory(newModel->keyFrames, sizeof(key_frame_t) * newModel->nbFrames);
-    LoadOBJ(path, fileName, scaleFactor, newModel);
+    LoadOBJ(path, fileName, scaleFactor, newModel, readOnly);
     return newModel;
 }
 

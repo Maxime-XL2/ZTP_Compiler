@@ -252,6 +252,8 @@ void            clearSelectedSurfaces();
 bool            isSurfaceSelected(int modelIndex, int faceIndex);
 unsigned int    selectedSurfaceCount();
 uint32_t        surfaceSelectionRevision();
+uint32_t        surfaceEditRevision();
+bool            saveZTPFile(const string & path, animated_model_t * model);
 bool            rayIntersectsPolygon(const float * origin, const float * direction, const model_t * mesh,
                                      const polygon_t * polygon, float minimumDistance);
 void            resetAutomaticLod();
@@ -261,6 +263,7 @@ unsigned int    automaticLodFaceCount();
 unsigned int    automaticLodPointCount();
 extern bool     showAutomaticLod;
 void            resetSelfShadowing();
+bool            applyAnimationPose(animated_model_t * model, const animationControl_t & control, bool clamp, bool interpolate = true);
 void            updateSelfShadowing(animated_model_t * model, bool geometryChanged);
 float           selfShadowFactor(unsigned int modelIndex, unsigned int vertexIndex);
 void            initializeLightSource(animated_model_t * model);

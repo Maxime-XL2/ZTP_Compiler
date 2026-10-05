@@ -93,13 +93,13 @@ void generateASCIIbitmap(){
 
 }
 
-void setTextures(animated_model_t * aModel)
+void setModelTextures(animated_model_t * aModel, unsigned int * textureIds)
 {
     uint16_t colorValue;
     for (unsigned int i=0; i<(unsigned int)aModel->nbTextures; i++)
     {
-        glGenTextures(1, &texId[i]);                                // Generate OpenGL texture IDs
-        glBindTexture(GL_TEXTURE_2D, texId[i]);
+        glGenTextures(1, &textureIds[i]);
+        glBindTexture(GL_TEXTURE_2D, textureIds[i]);
         texture_t * txt = &aModel->texture[i];
 
         GLubyte imgData[txt->width*txt->height*4]={0};
@@ -123,7 +123,11 @@ void setTextures(animated_model_t * aModel)
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, txt->width, txt->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, (void*)imgData);
     }
 
+}
+
+void setTextures(animated_model_t * aModel)
+{
+    setModelTextures(aModel, texId);
     generateMousePickupTexture();
     generateASCIIbitmap();
-
 }

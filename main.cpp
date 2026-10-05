@@ -6,19 +6,24 @@
 #include <cstring>
 #include <sstream>
 #include <cmath>
+#include <cctype>
+#include <vector>
 
 LRESULT CALLBACK WindowProc(HWND, UINT, WPARAM, LPARAM);
 void EnableOpenGL(HWND hwnd, HDC*, HGLRC*);
 void DisableOpenGL(HWND, HDC, HGLRC);
 void deleteModels(animated_model_t * model);
 extern int USE_SGL;
+extern string fileOutName;
 extern player_t PLAYER[4];
 extern unsigned int specialTextureId[256];
 extern unsigned int asciiTextureId;
 extern unsigned int texId[1280];
 extern void setTextures(animated_model_t *);
+extern void setModelTextures(animated_model_t *, unsigned int *);
 extern void resetPlayer(player_t *);
-extern animated_model_t * loadingConfigured(unsigned int, int, float, uint32_t, uint32_t, string, string);
+extern animated_model_t * loadingConfigured(unsigned int, int, float, uint32_t, uint32_t, string, string, bool = false);
+extern animated_model_t * loadZTPFile(const string &);
 extern int activeFace;
 extern int activeModel;
 extern int playAnimation;
@@ -36,6 +41,11 @@ namespace
 {
 const int IDM_FILE_OPEN = 1001;
 const int IDM_FILE_EXIT = 1002;
+const int IDM_COMPARISON_OPEN = 1003;
+const int IDM_COMPARISON_REMOVE = 1004;
+const int IDC_COMPARISON_FILE = 1005;
+const int IDM_FILE_SAVE = 1006;
+const int IDM_FILE_SAVE_AS = 1007;
 const int IDM_OPTIONS = 1101;
 const int SIDE_PANEL_WIDTH = ZTP_SIDE_PANEL_WIDTH;
 const int IDC_FRAME_COUNT = 2001;
@@ -92,10 +102,36 @@ struct LoadOptions
 
 LoadOptions loadOptions = {100, 0, 1.0f, true, 1};
 animated_model_t * currentModel = NULL;
+animated_model_t * comparisonModel = NULL;
+std::vector<unsigned int> comparisonTextureIds;
+std::vector<string> protectedReferencePaths;
+LoadOptions comparisonOptions = {256, 0, 1.0f, true, 1};
 string currentFolder;
 string currentFile;
 bool glReady = false;
+bool currentModelIsZTP = false;
+string ztpSavePath;
+bool ztpSaved = false;
+uint32_t savedEditRevision = 0;
+std::vector<std::vector<vertex_t> > ztpBasePose;
 uint32_t shownSelectionRevision = 0xFFFFFFFFu;
+
+string absoluteModelPath(const string & path);
+bool confirmZTPSave(HWND owner);
+
+void updateFileMenu(HWND owner)
+{
+    HMENU fileMenu = GetSubMenu(GetMenu(owner), 0);
+    if (!fileMenu) return;
+    DeleteMenu(fileMenu, IDM_FILE_SAVE, MF_BYCOMMAND);
+    DeleteMenu(fileMenu, IDM_FILE_SAVE_AS, MF_BYCOMMAND);
+    if (currentModelIsZTP)
+    {
+        InsertMenuA(fileMenu, IDM_COMPARISON_OPEN, MF_BYCOMMAND | MF_STRING, IDM_FILE_SAVE, "Save");
+        InsertMenuA(fileMenu, IDM_COMPARISON_OPEN, MF_BYCOMMAND | MF_STRING, IDM_FILE_SAVE_AS, "Save as...");
+    }
+    DrawMenuBar(owner);
+}
 
 void resetModelAnimation(animated_model_t * model)
 {
@@ -133,6 +169,7 @@ void updateLightFromSliders(HWND parent)
     SetDlgItemTextA(parent, IDC_LIGHT_ELEVATION_LABEL, label);
     setLightOrientation(static_cast<float>(azimuth), static_cast<float>(elevation));
     if (currentModel) calcLight(currentModel);
+    if (comparisonModel) calcLight(comparisonModel);
 }
 
 void createSidePanel(HWND parent)
@@ -140,6 +177,10 @@ void createSidePanel(HWND parent)
     addControl(parent, "BUTTON", "Model", BS_GROUPBOX, 0, 0, 10, 10, IDC_MODEL_GROUP);
     addControl(parent, "BUTTON", "Surface options", BS_GROUPBOX, 0, 0, 10, 10, IDC_SURFACE_GROUP);
     addControl(parent, "BUTTON", "Open another OBJ...", BS_PUSHBUTTON, 0, 0, 10, 10, IDC_OPEN_ANOTHER);
+    addControl(parent, "BUTTON", "Load reference...", BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 10, 10, IDM_COMPARISON_OPEN);
+    addControl(parent, "BUTTON", "Remove reference", BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 10, 10, IDM_COMPARISON_REMOVE);
+    addControl(parent, "STATIC", "Reference: none", SS_LEFT, 0, 0, 10, 10, IDC_COMPARISON_FILE);
+    EnableWindow(GetDlgItem(parent, IDM_COMPARISON_REMOVE), FALSE);
     addControl(parent, "STATIC", "No model loaded", SS_LEFT, 0, 0, 10, 10, IDC_CURRENT_FILE);
     addControl(parent, "STATIC", "Select a polygon to edit", SS_LEFT, 0, 0, 10, 10, IDC_SURFACE_STATUS);
     addControl(parent, "STATIC", "Ctrl+click: add/remove | Ctrl+A: all", SS_LEFT, 0, 0, 10, 10, IDC_SELECTION_HELP);
@@ -200,6 +241,7 @@ void createSidePanel(HWND parent)
 
     HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
     const int controlIds[] = {
+        IDM_COMPARISON_OPEN, IDM_COMPARISON_REMOVE, IDC_COMPARISON_FILE,
         IDC_OPEN_ANOTHER, IDC_CURRENT_FILE, IDC_SURFACE_STATUS, IDC_SELECTION_HELP,
         IDC_SURFACE_DOUBLE_SIDED, IDC_SURFACE_UV_DIRECTION, IDC_SURFACE_MESH,
         IDC_SURFACE_GOURAUD, IDC_SURFACE_LIGHT, IDC_SURFACE_DEPTH,
@@ -255,7 +297,10 @@ void layoutSidePanel(HWND parent)
         {IDC_LOD_REDUCTION, 174, 611, 146, 26},
         {IDC_LOD_GENERATE, 20, 642, 146, 26},
         {IDC_LOD_SHOW, 174, 642, 146, 26},
-        {IDC_LOD_STATUS, 20, 673, width - 24, 30}
+        {IDC_LOD_STATUS, 20, 673, width - 24, 30},
+        {IDM_COMPARISON_OPEN, 20, 709, 146, 26},
+        {IDM_COMPARISON_REMOVE, 174, 709, 146, 26},
+        {IDC_COMPARISON_FILE, 20, 741, width - 24, 36}
     };
     for (unsigned int i = 0; i < sizeof(placements) / sizeof(placements[0]); ++i)
     {
@@ -463,6 +508,7 @@ bool loadModel(const string & folder, const string & fileName, HWND owner)
 {
     LoadOptions selectedOptions = loadOptions;
     if (!showOptionsDialog(owner, &selectedOptions)) return false;
+    if (!confirmZTPSave(owner)) return false;
 
     delete [] skin.pixel;
     skin.pixel = NULL;
@@ -475,6 +521,10 @@ bool loadModel(const string & folder, const string & fileName, HWND owner)
     loadOptions = selectedOptions;
     currentFolder = folder;
     currentFile = fileName;
+    currentModelIsZTP = false;
+    ztpBasePose.clear();
+    ztpSavePath.clear();
+    updateFileMenu(owner);
     clearSelectedSurfaces();
     setTextures(currentModel);
     for (int player = 0; player < 4; ++player) resetPlayer(&PLAYER[player]);
@@ -484,19 +534,192 @@ bool loadModel(const string & folder, const string & fileName, HWND owner)
     return true;
 }
 
-void openModelDialog(HWND owner)
+bool loadZTPModel(const string &path, const string &fileName, HWND owner)
+{
+    if (!confirmZTPSave(owner)) return false;
+    animated_model_t *nextModel = loadZTPFile(path);
+    if (!nextModel)
+    {
+        MessageBoxA(owner, "Could not read this file as a useSGL = 0 ZTP model.", "ZTP load failed",
+                    MB_OK | MB_ICONERROR);
+        return false;
+    }
+    releaseModelTextures(currentModel);
+    deleteModels(currentModel);
+    currentModel = nextModel;
+    currentFolder = path;
+    currentFile = fileName;
+    currentModelIsZTP = true;
+    ztpSavePath = absoluteModelPath(path);
+    currentFolder = ztpSavePath;
+    ztpSaved = false;
+    savedEditRevision = surfaceEditRevision();
+    ztpBasePose.resize(currentModel->nbModels);
+    for (unsigned int mesh = 0; mesh < currentModel->nbModels; ++mesh)
+        ztpBasePose[mesh].assign(currentModel->model[mesh].pntbl,
+            currentModel->model[mesh].pntbl + currentModel->model[mesh].nbPoint);
+    updateFileMenu(owner);
+    USE_SGL = 0;
+    fileOutName = fileName.substr(0, fileName.find_last_of('.'));
+    if (fileOutName.empty()) fileOutName = "model";
+    clearSelectedSurfaces();
+    setTextures(currentModel);
+    for (int player = 0; player < 4; ++player) resetPlayer(&PLAYER[player]);
+    resetModelAnimation(currentModel);
+    SetWindowTextA(owner, ("ZTP Converter - " + fileName).c_str());
+    updateSurfacePanel(owner, currentModel);
+    return true;
+}
+
+string absoluteModelPath(const string & path)
+{
+    DWORD required = GetFullPathNameA(path.c_str(), 0, NULL, NULL);
+    if (!required) return path;
+    std::vector<char> buffer(required);
+    DWORD length = GetFullPathNameA(path.c_str(), required, buffer.data(), NULL);
+    return length && length < required ? string(buffer.data(), length) : path;
+}
+
+bool isProtectedReferencePath(const string & path)
+{
+    const string absolute = absoluteModelPath(path);
+    for (const string & reference : protectedReferencePaths)
+        if (_stricmp(absolute.c_str(), reference.c_str()) == 0) return true;
+    return false;
+}
+
+bool saveCurrentZTP(HWND owner, bool saveAs)
+{
+    if (!currentModel || !currentModelIsZTP) return false;
+    string destination = ztpSavePath;
+    if (saveAs)
+    {
+        char filePath[MAX_PATH] = {};
+        std::strncpy(filePath, destination.c_str(), sizeof(filePath) - 1);
+        OPENFILENAMEA dialog = {};
+        dialog.lStructSize = sizeof(dialog);
+        dialog.hwndOwner = owner;
+        dialog.lpstrTitle = "Save ZTP as";
+        dialog.lpstrFilter = "ZTP files (*.ztp)\0*.ztp\0\0";
+        dialog.lpstrFile = filePath;
+        dialog.nMaxFile = MAX_PATH;
+        dialog.lpstrDefExt = "ZTP";
+        dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        if (!GetSaveFileNameA(&dialog)) return false;
+        destination = absoluteModelPath(filePath);
+    }
+    if (isProtectedReferencePath(destination))
+    {
+        MessageBoxA(owner, "This file was loaded as a visual reference and cannot be overwritten. Choose another name with Save as.",
+                    "Protected reference", MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    animated_model_t modelToSave = *currentModel;
+    std::vector<model_t> meshes(currentModel->model, currentModel->model + currentModel->nbModels);
+    for (unsigned int mesh = 0; mesh < meshes.size(); ++mesh)
+        meshes[mesh].pntbl = ztpBasePose[mesh].data();
+    modelToSave.model = meshes.data();
+    if (!saveZTPFile(destination, &modelToSave))
+    {
+        MessageBoxA(owner, "Could not save the ZTP file. Check the destination and write permissions. The previous file has not been replaced.",
+                    "Save failed", MB_OK | MB_ICONERROR);
+        return false;
+    }
+    ztpSavePath = destination;
+    currentFolder = destination;
+    currentFile = destination.substr(destination.find_last_of("\\/") + 1);
+    fileOutName = currentFile.substr(0, currentFile.find_last_of('.'));
+    ztpSaved = true;
+    savedEditRevision = surfaceEditRevision();
+    SetWindowTextA(owner, ("ZTP Converter - " + currentFile).c_str());
+    updateSurfacePanel(owner, currentModel);
+    return true;
+}
+
+bool confirmZTPSave(HWND owner)
+{
+    if (!currentModelIsZTP || !currentModel ||
+        (ztpSaved && savedEditRevision == surfaceEditRevision())) return true;
+    int answer = MessageBoxA(owner, "Save the current ZTP file before continuing?",
+        "Unsaved ZTP", MB_YESNOCANCEL | MB_ICONQUESTION);
+    if (answer == IDCANCEL) return false;
+    return answer == IDNO || (answer == IDYES && saveCurrentZTP(owner, false));
+}
+
+void removeComparison(HWND owner)
+{
+    if (!comparisonTextureIds.empty())
+        glDeleteTextures(static_cast<GLsizei>(comparisonTextureIds.size()), comparisonTextureIds.data());
+    comparisonTextureIds.clear();
+    deleteModels(comparisonModel);
+    comparisonModel = NULL;
+    resetSelfShadowing();
+    resetPreviewColors();
+    SetDlgItemTextA(owner, IDC_COMPARISON_FILE, "Reference: none");
+    EnableWindow(GetDlgItem(owner, IDM_COMPARISON_REMOVE), FALSE);
+}
+
+bool loadComparison(const string & fullPath, const string & folder, const string & fileName,
+                    bool isZTP, HWND owner)
+{
+    if (!currentModel)
+    {
+        MessageBoxA(owner, "Open a working model first.", "Visual reference", MB_OK | MB_ICONINFORMATION);
+        return false;
+    }
+    animated_model_t * nextModel = NULL;
+    LoadOptions options = comparisonOptions;
+    if (isZTP) nextModel = loadZTPFile(fullPath);
+    else
+    {
+        if (!showOptionsDialog(owner, &options)) return false;
+        const int savedSgl = USE_SGL;
+        const uint32_t savedUv = useUV;
+        const uint32_t savedSpecial = specialOption;
+        const uint32_t savedCoordinatesCount = tot_tex_coord;
+        const std::vector<uv_t> savedCoordinates(texture_coord, texture_coord + tot_tex_coord);
+        nextModel = loadingConfigured(options.frameCount, options.sglMode, options.scale,
+            options.useUv ? 1u : 0u, options.specialOptions, folder, fileName, true);
+        USE_SGL = savedSgl;
+        useUV = savedUv;
+        specialOption = savedSpecial;
+        tot_tex_coord = savedCoordinatesCount;
+        std::copy(savedCoordinates.begin(), savedCoordinates.end(), texture_coord);
+    }
+    if (!nextModel || !nextModel->nbModels || !nextModel->nbTextures)
+    {
+        deleteModels(nextModel);
+        MessageBoxA(owner, "Could not read this reference (ZTP requires useSGL = 0).",
+                    "Reference load failed", MB_OK | MB_ICONERROR);
+        return false;
+    }
+    removeComparison(owner);
+    comparisonModel = nextModel;
+    protectedReferencePaths.push_back(absoluteModelPath(fullPath));
+    comparisonOptions = options;
+    comparisonTextureIds.resize(comparisonModel->nbTextures);
+    setModelTextures(comparisonModel, comparisonTextureIds.data());
+    calcLight(comparisonModel);
+    SetDlgItemTextA(owner, IDC_COMPARISON_FILE, ("Reference: " + fileName).c_str());
+    EnableWindow(GetDlgItem(owner, IDM_COMPARISON_REMOVE), TRUE);
+    return true;
+}
+
+void openModelDialog(HWND owner, bool comparison = false)
 {
     char filePath[MAX_PATH] = {};
     OPENFILENAMEA dialog = {};
     dialog.lStructSize = sizeof(dialog);
     dialog.hwndOwner = owner;
-    dialog.lpstrFilter = "Wavefront OBJ files (*.obj)\0*.obj\0All files (*.*)\0*.*\0\0";
+    dialog.lpstrTitle = comparison ? "Load visual reference" : "Open working model";
+    dialog.lpstrFilter = "Model files (*.obj;*.ztp)\0*.obj;*.ztp\0Wavefront OBJ files (*.obj)\0*.obj\0ZTP files (*.ztp)\0*.ztp\0All files (*.*)\0*.*\0\0";
     dialog.lpstrFile = filePath;
     dialog.nMaxFile = MAX_PATH;
     dialog.lpstrDefExt = "obj";
     dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
     if (!GetOpenFileNameA(&dialog)) return;
 
+    const string fullPath = filePath;
     char * separator = strrchr(filePath, '\\');
     if (!separator) separator = strrchr(filePath, '/');
     string folder;
@@ -513,15 +736,32 @@ void openModelDialog(HWND owner)
         fileName = filePath;
     }
     size_t extension = fileName.find_last_of('.');
-    if (extension != string::npos) fileName.resize(extension);
-    loadModel(folder, fileName, owner);
+    string extensionName = extension == string::npos ? "" : fileName.substr(extension);
+    for (size_t index = 0; index < extensionName.size(); ++index)
+        extensionName[index] = static_cast<char>(std::tolower(static_cast<unsigned char>(extensionName[index])));
+    if (extensionName == ".ztp")
+    {
+        if (comparison) loadComparison(fullPath, folder, fileName, true, owner);
+        else loadZTPModel(fullPath, fileName, owner);
+        return;
+    }
+    if (extensionName != ".obj")
+    {
+        MessageBoxA(owner, "Choose an OBJ or ZTP file.", "Unsupported file", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    fileName.resize(extension);
+    if (comparison) loadComparison(fullPath, folder, fileName, false, owner);
+    else loadModel(folder, fileName, owner);
 }
 
 HMENU createMainMenu()
 {
     HMENU menu = CreateMenu();
     HMENU fileMenu = CreatePopupMenu();
-    AppendMenuA(fileMenu, MF_STRING, IDM_FILE_OPEN, "Open OBJ...");
+    AppendMenuA(fileMenu, MF_STRING, IDM_FILE_OPEN, "Open model...");
+    AppendMenuA(fileMenu, MF_STRING, IDM_COMPARISON_OPEN, "Load visual reference...");
+    AppendMenuA(fileMenu, MF_STRING, IDM_COMPARISON_REMOVE, "Remove visual reference");
     AppendMenuA(fileMenu, MF_SEPARATOR, 0, NULL);
     AppendMenuA(fileMenu, MF_STRING, IDM_FILE_EXIT, "Exit");
     AppendMenuA(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(fileMenu), "File");
@@ -535,7 +775,6 @@ HMENU createMainMenu()
 void deleteModels(animated_model_t * model)
 {
     if (!model) return;
-    resetAutomaticLod();
     for (unsigned int i=0; i<model->nbModels; i++) {
         delete [] model->model[i].pltbl;
         delete [] model->model[i].pntbl;
@@ -582,7 +821,7 @@ BOOL bQuit = FALSE;
 extern void                     initOpenGL();
 extern animated_model_t *       loading(string line);
 extern void                     setTextures(animated_model_t * model);
-extern int                      render(animated_model_t * aModel);
+extern int                      render(animated_model_t * aModel, animated_model_t * comparison, const unsigned int * comparisonTextures);
 extern void                     calcLight(animated_model_t*);
 
 WNDCLASSEX wcex;
@@ -694,8 +933,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             extern int myControls(player_t*, animated_model_t*);
             if (myControls(&PLAYER[0], currentModel) == -1)
             {
-                bQuit = TRUE;
-                break;
+                SendMessageA(hwnd, WM_CLOSE, 0, 0);
             }
             if (shownSelectionRevision != surfaceSelectionRevision())
                 updateSurfacePanel(hwnd, currentModel);
@@ -707,7 +945,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             PLAYER[0].POSITION[Z] = PLAYER[0].NEXT_POSITION[Z];
             if (DisplayTEST==0) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
             else glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-            render(currentModel);
+            render(currentModel, comparisonModel, comparisonTextureIds.data());
             glPopMatrix();
             renderText(currentModel);
         }
@@ -722,21 +960,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
 
 #if 1
-    if (currentModel)
+    if (currentModel && !currentModelIsZTP)
     {
     extern string fileOutName;// = "OUT/" + fileIn;
-    const char * path = "OUT/";
-    CreateDirectory(path, NULL);
+    CreateDirectory("OUT/", NULL);
     cout << "NOW CREATING BINARY FILE " << fileOutName << ".ZTP\n";
-    string binaryFileName = "OUT\\" + fileOutName + ".ZTP";  //Z-Treme character
+    string binaryFileName = "OUT\\" + fileOutName + ".ZTP";
+    while (isProtectedReferencePath(binaryFileName))
+        binaryFileName.insert(binaryFileName.size() - 4, "_working");
+    cout << "Binary output: " << binaryFileName << "\n";
 
     ofstream binFile(binaryFileName.c_str(), ios::out | ios::binary);
     if (!binFile.is_open()) {cout << "\nERROR WHILE WRITING BINARY FILE!\n";}
     else {
-        extern write_model_binary(ofstream*file, animated_model_t*aModel);
+        extern void write_model_binary(ofstream*file, animated_model_t*aModel, bool preserveLoadedZTP);
         extern bool write_MOD_HEADER(string filename, animated_model_t * aModel);
 
-        write_model_binary(&binFile, currentModel);
+        write_model_binary(&binFile, currentModel, currentModelIsZTP);
         cout << "Writing debug text file...\n";
 
         write_MOD_HEADER("OUT.TXT", currentModel);
@@ -748,6 +988,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 #endif // 1
 
     /* shutdown OpenGL */
+    removeComparison(hwnd);
+    resetAutomaticLod();
     releaseModelTextures(currentModel);
     deleteModels(currentModel);
     DisableOpenGL(hwnd, hDC, hRC);
@@ -778,7 +1020,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
         case WM_GETMINMAXINFO:
         {
-            RECT minimum = {0, 0, SIDE_PANEL_WIDTH + 320, 710};
+            RECT minimum = {0, 0, SIDE_PANEL_WIDTH + 320, 784};
             AdjustWindowRectEx(&minimum, WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_OVERLAPPEDWINDOW, TRUE, 0);
             MINMAXINFO * limits = reinterpret_cast<MINMAXINFO *>(lParam);
             limits->ptMinTrackSize.x = minimum.right - minimum.left;
@@ -809,7 +1051,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
         case WM_CLOSE:
             if (GetCapture() == hwnd) ReleaseCapture();
-            PostQuitMessage(0);
+            if (confirmZTPSave(hwnd)) PostQuitMessage(0);
         break;
 
         case WM_DESTROY:
@@ -820,7 +1062,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             switch (wParam)
             {
                 case VK_ESCAPE:
-                    PostQuitMessage(0);
+                    if (!(lParam & (1u << 30))) SendMessageA(hwnd, WM_CLOSE, 0, 0);
                 break;
             }
         }
@@ -869,12 +1111,26 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 case IDC_OPEN_ANOTHER:
                     openModelDialog(hwnd);
                     return 0;
+                case IDM_COMPARISON_OPEN:
+                    openModelDialog(hwnd, true);
+                    SetFocus(hwnd);
+                    return 0;
+                case IDM_COMPARISON_REMOVE:
+                    removeComparison(hwnd);
+                    SetFocus(hwnd);
+                    return 0;
                 case IDM_OPTIONS:
-                    if (!currentFile.empty()) loadModel(currentFolder, currentFile, hwnd);
+                    if (currentModelIsZTP) loadZTPModel(currentFolder, currentFile, hwnd);
+                    else if (!currentFile.empty()) loadModel(currentFolder, currentFile, hwnd);
                     else showOptionsDialog(hwnd, &loadOptions);
                     return 0;
                 case IDM_FILE_EXIT:
-                    PostQuitMessage(0);
+                    SendMessageA(hwnd, WM_CLOSE, 0, 0);
+                    return 0;
+                case IDM_FILE_SAVE:
+                case IDM_FILE_SAVE_AS:
+                    saveCurrentZTP(hwnd, LOWORD(wParam) == IDM_FILE_SAVE_AS);
+                    SetFocus(hwnd);
                     return 0;
                 case IDC_WIREFRAME:
                     if (HIWORD(wParam) == BN_CLICKED)

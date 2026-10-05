@@ -20,6 +20,24 @@
                 "kind": "build",
                 "isDefault": true
             }
+        },
+        {
+            "label": "Build ZTP Compiler (Release)",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\.vscode\\build.ps1",
+                "-Configuration",
+                "Release"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": "$gcc"
         }
     ]
 }

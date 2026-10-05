@@ -1,10 +1,15 @@
+param(
+    [ValidateSet('Debug', 'Release')]
+    [string]$Configuration = 'Debug'
+)
+
 $ErrorActionPreference = 'Stop'
 
 $workspaceRoot = Split-Path $PSScriptRoot -Parent
 $compiler = 'C:\Program Files\CodeBlocks\MinGW\bin\g++.exe'
 $projectPath = Join-Path $workspaceRoot 'ZTP_Compiler.cbp'
-$outputPath = Join-Path $workspaceRoot 'bin\Debug\ZTP_Compiler.exe'
-$objectRoot = Join-Path $workspaceRoot 'obj\Debug'
+$outputPath = Join-Path $workspaceRoot "bin\$Configuration\ZTP_Compiler.exe"
+$objectRoot = Join-Path $workspaceRoot "obj\$Configuration"
 $statePath = Join-Path $objectRoot '.build-state.json'
 
 if (-not (Test-Path $compiler)) {
@@ -25,9 +30,11 @@ try {
 
     New-Item -ItemType Directory -Force -Path (Split-Path $outputPath), $objectRoot | Out-Null
 
-    $compileFlags = @('-std=gnu++14', '-g', '-O0', '-Wall')
+    $configurationFlags = if ($Configuration -eq 'Release') { @('-O2') } else { @('-g', '-O0') }
+    $compileFlags = @('-std=gnu++14') + $configurationFlags + @('-Wall')
     $linkFlags = @('-mwindows', '-static-libstdc++', '-static-libgcc', '-static',
                    '-lcomdlg32', '-lcomctl32', '-lopengl32', '-lglu32', '-lgdi32')
+    if ($Configuration -eq 'Release') { $linkFlags += '-s' }
     $compilerVersion = (& $compiler --version | Select-Object -First 1)
     $compileSignature = (@($compiler, $compilerVersion) + $compileFlags + $sources) -join "`n"
     $projectTimestamp = (Get-Item $projectPath).LastWriteTimeUtc.ToString('o')
@@ -67,7 +74,7 @@ try {
         }
 
         if ($needsCompile) {
-            $relativeObject = "obj/Debug/$objectName"
+            $relativeObject = "obj/$Configuration/$objectName"
             $arguments = $compileFlags + @('-MMD', '-MF', $dependencyPath, '-MT', $relativeObject,
                                            '-c', $source, '-o', $objectPath)
             & $compiler @arguments

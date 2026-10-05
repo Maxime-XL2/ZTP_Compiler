@@ -1,0 +1,57 @@
+#ifndef LUTaddr
+#define     LUTaddr             (0x25C7A960)
+#define     returnLUTaddr(n)    (LUTaddr + (0x20 * n))
+#define     LUTidx(n)           (Uint16)(62764 + (4 * n))
+#define     CRAM_Base           (0x25f00200)
+#define     returnCRAMaddr(n)   (CRAM_Base + (0x20 * n))
+#define     LUTcramIdx(n)       ((256 + (16 * n)))
+#endif
+
+//MESH NO.0 : 
+POINT point_0[] = {
+       POStoFIXED(0, 20, -35),
+       POStoFIXED(0, 80, -35),
+       POStoFIXED(21.2132, 28.7868, -35),
+       POStoFIXED(30, 50, -35),
+       POStoFIXED(21.2132, 71.2132, -35),
+       POStoFIXED(-21.2132, 28.7868, -35),
+       POStoFIXED(-30, 50, -35),
+       POStoFIXED(-21.2132, 71.2132, -35),
+};
+
+POLYGON polygon_0[] = {
+       NORMAL(0, 0, 1), VERTICES(0, 0, 5, 6),
+       NORMAL(0, 0, 1), VERTICES(3, 3, 2, 0),
+       NORMAL(0, 0, 1), VERTICES(1, 1, 4, 3),
+       NORMAL(0, 0, 1), VERTICES(3, 3, 7, 1),
+       NORMAL(0, 0, 1), VERTICES(7, 3, 0, 6),
+};
+
+ATTR attribute_0[] = {
+       ATTRIBUTE(Single_Plane, SORT_CEN, 0, LUTidx(0), No_Gouraud,Window_In|MESHoff|HSSon|ECdis|SPdis|CL_Gouraud|CL16Look,sprNoflip, UseNearClip),
+       ATTRIBUTE(Single_Plane, SORT_CEN, 1, LUTidx(1), No_Gouraud,Window_In|MESHoff|HSSon|ECdis|SPdis|CL_Gouraud|CL16Look,sprNoflip, UseNearClip),
+       ATTRIBUTE(Single_Plane, SORT_CEN, 2, LUTidx(2), No_Gouraud,Window_In|MESHoff|HSSon|ECdis|SPdis|CL_Gouraud|CL16Look,sprNoflip, UseNearClip),
+       ATTRIBUTE(Single_Plane, SORT_CEN, 3, LUTidx(3), No_Gouraud,Window_In|MESHoff|HSSon|ECdis|SPdis|CL_Gouraud|CL16Look,sprNoflip, UseNearClip),
+       ATTRIBUTE(Single_Plane, SORT_CEN, 4, LUTidx(4), No_Gouraud,Window_In|MESHoff|HSSon|ECdis|SPdis|CL_Gouraud|CL16Look,sprNoflip, UseNearClip),
+};
+
+VECTOR normal_0[] = {
+       POStoFIXED(0, 0, 1),
+       POStoFIXED(0, 0, 1),
+       POStoFIXED(0, 0, 1),
+       POStoFIXED(0, 0, 1),
+       POStoFIXED(0, 0, 1),
+       POStoFIXED(0, 0, 1),
+       POStoFIXED(0, 0, 1),
+       POStoFIXED(0, 0, 1),
+};
+
+XPDATA xpdata_0[] = {
+   {
+       point_0, sizeof(point_0)/sizeof(POINT),
+       polygon_0, sizeof(polygon_0)/sizeof(POLYGON),
+       attribute_0,
+       normal_0
+  }
+};
+

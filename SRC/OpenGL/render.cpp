@@ -1,5 +1,7 @@
 #include "../COMMON.H"
+#include "projected_grid.h"
 #include <limits>
+#include <vector>
 
 extern player_t PLAYER[];
 extern int ZT_FRAMERATE;
@@ -75,7 +77,6 @@ void ztUpdateAnimation(animationControl_t * animCtrl, animated_model_t * current
     /**Sets the animation data**/
     uint32_t FPS = MIN(animCtrl->fps, 10);
     uint32_t frameUnit = 1u << FPS;
-    float percent = 1.0f / static_cast<float>(frameUnit);
     uint32_t startFrame = animCtrl->startFrm;
     uint32_t endFrame = MIN(animCtrl->endFrm, currentModel->nbFrames);
     if (endFrame <= startFrame) return;
@@ -95,35 +96,8 @@ void ztUpdateAnimation(animationControl_t * animCtrl, animated_model_t * current
 
     animCtrl->currentKeyFrm = static_cast<uint16_t>(currentFrame >> FPS);
 
-    uint16_t nextKeyFrm=animCtrl->currentKeyFrm+1;
-    if (nextKeyFrm>=animCtrl->endFrm)
-        nextKeyFrm=animCtrl->startFrm;
-
-
-    vertex_t * curKeyFrame = (vertex_t*)currentModel->keyFrames[animCtrl->currentKeyFrm].cVert;
-    vertex_t * nextKeyFrame = (vertex_t*)currentModel->keyFrames[nextKeyFrm].cVert;
-
-    if (!curKeyFrame || !nextKeyFrame) return;
-    uint32_t interpFctr = currentFrame - (animCtrl->currentKeyFrm * frameUnit);
-
     extern int enableInterpolation;
-    if (!enableInterpolation) {interpFctr=0;}
-    unsigned int j=0;
-    for (unsigned int i=0; i<currentModel->nbModels; i++)
-        {
-            model_t * currentPDATA = &currentModel->model[i];
-            for (unsigned int ii=0; ii<currentModel->model[i].nbPoint; ii++)
-            {
-                vertex_t *dst=(vertex_t*)&currentPDATA->pntbl[ii];
-                vertex_t *src=(vertex_t*)&curKeyFrame[j];
-                vertex_t *nxt=(vertex_t*)&nextKeyFrame[j];
-
-                for (uint32_t v=0; v<3; v++) {
-                   dst->point[v]=(src->point[v]) + (((nxt->point[v]-src->point[v])*interpFctr)*percent);
-                }
-                j++;
-            }
-        }
+    applyAnimationPose(currentModel, *animCtrl, false, enableInterpolation != 0);
 }
 
 void vectorNormalize(float * v) {
@@ -166,9 +140,8 @@ void renderLightSource(animated_model_t * model)
     glPopAttrib();
 }
 
-void renderShadow(model_t * m, const polygon_t * p) {
+void renderShadow(model_t * m, const polygon_t * p, float groundY) {
     if (lightDir[Y] <= 0.0001f) return;
-    float groundY = m->BoxMax[1];
 
     glDepthMask(GL_FALSE);
     bool triangle = p->vertIdx[2] == p->vertIdx[3];
@@ -252,13 +225,93 @@ void renderAutomaticLod(animated_model_t * model)
                 glVertex3fv(mesh->pntbl[face.vertIdx[corner]].point);
             glEnd();
             glColor3f(0.0f, 0.0f, 0.0f);
-            renderShadow(mesh, &face);
+            renderShadow(mesh, &face, model->BoxMax[Y]);
         }
     }
     glPopAttrib();
 }
 
-int render(animated_model_t * aModel)
+static void renderProjectedGrid(const projected_grid::Vertex * corners, int width, int height, bool wireframe)
+{
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+
+    if (wireframe)
+    {
+        glBegin(GL_LINE_LOOP);
+        for (int corner = 3; corner >= 0; --corner)
+        {
+            glColor4fv(corners[corner].color);
+            glTexCoord2fv(corners[corner].uv);
+            glVertex3dv(corners[corner].position);
+        }
+        glEnd();
+    }
+    else
+    {
+        static std::vector<projected_grid::Vertex> vertices;
+        static std::vector<GLushort> indices;
+        static unsigned int cachedDetail = 0;
+        const unsigned int detail = projected_grid::subdivisions(corners, width, height);
+        const unsigned int stride = detail + 1;
+        vertices.resize(stride * stride);
+        for (unsigned int row = 0; row <= detail; ++row)
+        {
+            const float vertical = static_cast<float>(row) / detail;
+            const projected_grid::Vertex left = projected_grid::interpolate(corners, 0, vertical);
+            const projected_grid::Vertex right = projected_grid::interpolate(corners, 1, vertical);
+            for (unsigned int column = 0; column <= detail; ++column)
+            {
+                const float horizontal = static_cast<float>(column) / detail;
+                projected_grid::Vertex & vertex = vertices[row * stride + column];
+                for (unsigned int axis = 0; axis < 3; ++axis)
+                    vertex.position[axis] = left.position[axis] + (right.position[axis] - left.position[axis]) * horizontal;
+                for (unsigned int axis = 0; axis < 2; ++axis)
+                    vertex.uv[axis] = left.uv[axis] + (right.uv[axis] - left.uv[axis]) * horizontal;
+                for (unsigned int channel = 0; channel < 4; ++channel)
+                    vertex.color[channel] = left.color[channel] + (right.color[channel] - left.color[channel]) * horizontal;
+            }
+        }
+        if (cachedDetail != detail)
+        {
+            indices.resize(detail * detail * 6);
+            unsigned int nextIndex = 0;
+            for (unsigned int row = 0; row < detail; ++row)
+                for (unsigned int column = 0; column < detail; ++column)
+                {
+                    const GLushort topLeft = static_cast<GLushort>(row * stride + column);
+                    const GLushort bottomLeft = static_cast<GLushort>(topLeft + stride);
+                    indices[nextIndex++] = topLeft;
+                    indices[nextIndex++] = bottomLeft;
+                    indices[nextIndex++] = topLeft + 1;
+                    indices[nextIndex++] = topLeft + 1;
+                    indices[nextIndex++] = bottomLeft;
+                    indices[nextIndex++] = bottomLeft + 1;
+                }
+            cachedDetail = detail;
+        }
+        glPushClientAttrib(GL_CLIENT_VERTEX_ARRAY_BIT);
+        glEnableClientState(GL_VERTEX_ARRAY);
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        glEnableClientState(GL_COLOR_ARRAY);
+        glVertexPointer(3, GL_DOUBLE, sizeof(projected_grid::Vertex), vertices[0].position);
+        glTexCoordPointer(2, GL_FLOAT, sizeof(projected_grid::Vertex), vertices[0].uv);
+        glColorPointer(4, GL_FLOAT, sizeof(projected_grid::Vertex), vertices[0].color);
+        glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(indices.size()), GL_UNSIGNED_SHORT, indices.data());
+        glPopClientAttrib();
+    }
+
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+}
+
+int render(animated_model_t * aModel, animated_model_t * comparison, const unsigned int * comparisonTextures)
 {
             float sourcePosition[3], markerRadius;
             getLightSourcePosition(aModel, sourcePosition, &markerRadius);
@@ -275,15 +328,6 @@ int render(animated_model_t * aModel)
             if (!(DisplayTEST&1))glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
             else  glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 
-        /*    if (DisplayTEST>1)
-            else useUV=1;*/
-//useUV=0;
-uint32_t newUseUV=useUV;
-#if 1
-newUseUV=0;
-#endif
-
-
             glEnable(GL_BLEND);
             glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
            // glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, 0x0105);
@@ -299,29 +343,68 @@ newUseUV=0;
                 //testAnim+=ZT_FRAMERATE;
                 //if (testAnim >= aModel->nbFrames*playSpeed) testAnim=0;
             }
-            if (showAutomaticLod)
+            if (comparison)
             {
-                renderAutomaticLod(aModel);
-                renderLightSource(aModel);
-                glPopMatrix();
-                return 1;
+                extern int enableInterpolation;
+                applyAnimationPose(comparison, PLAYER[0].ANIMCTRL, true, enableInterpolation != 0);
             }
-            updateSelfShadowing(aModel, geometryChanged);
-            updatePreviewColors(aModel);
+            static std::vector<model_t> sceneMeshes;
+            static std::vector<std::vector<vertex_t> > comparisonPoints;
+            static animated_model_t scene = {};
+            sceneMeshes.assign(aModel->model, aModel->model + aModel->nbModels);
+            comparisonPoints.resize(comparison ? comparison->nbModels : 0);
+            if (comparison)
+                for (unsigned int mesh = 0; mesh < comparison->nbModels; ++mesh)
+                {
+                    model_t transformed = comparison->model[mesh];
+                    if (comparisonPoints[mesh].size() != transformed.nbPoint) geometryChanged = true;
+                    comparisonPoints[mesh].resize(transformed.nbPoint);
+                    for (unsigned int point = 0; point < transformed.nbPoint; ++point)
+                    {
+                        vertex_t vertex = transformed.pntbl[point];
+                        for (unsigned int axis = 0; axis < XYZ; ++axis)
+                        {
+                            vertex.point[axis] *= comparison->scale[axis] / aModel->scale[axis];
+                            vertex.normal[axis] *= aModel->scale[axis] / comparison->scale[axis];
+                            if (vertex.point[axis] != comparisonPoints[mesh][point].point[axis]) geometryChanged = true;
+                        }
+                        vectorNormalize(vertex.normal);
+                        for (unsigned int channel = 0; channel < 3; ++channel)
+                            vertex.color[channel] = -dotProduct(vertex.normal, defLight);
+                        comparisonPoints[mesh][point] = vertex;
+                    }
+                    transformed.pntbl = comparisonPoints[mesh].data();
+                    sceneMeshes.push_back(transformed);
+                }
+            scene.model = sceneMeshes.data();
+            scene.nbModels = static_cast<unsigned int>(sceneMeshes.size());
+            updateSelfShadowing(comparison ? &scene : aModel, geometryChanged);
+            updatePreviewColors(comparison ? &scene : aModel);
+            if (showAutomaticLod) renderAutomaticLod(aModel);
+
+            GLdouble modelView[16], projection[16];
+            GLint viewport[4];
+            glGetDoublev(GL_MODELVIEW_MATRIX, modelView);
+            glGetDoublev(GL_PROJECTION_MATRIX, projection);
+            glGetIntegerv(GL_VIEWPORT, viewport);
 
             extern unsigned int texId[];
-            for (unsigned int m=0; m<aModel->nbModels; m++)
+            for (unsigned int m=0; m<scene.nbModels; m++)
             {
-                model_t * curModel = &aModel->model[m];
+                const bool reference = m >= aModel->nbModels;
+                if (!reference && showAutomaticLod) continue;
+                const animated_model_t * source = reference ? comparison : aModel;
+                const unsigned int * textureIds = reference ? comparisonTextures : texId;
+                model_t * curModel = &scene.model[m];
                 vertex_t * curVert;
                 for (unsigned int i=0; i<curModel->nbPolygon; i++)
                 {
 
                     polygon_t * pol = &curModel->pltbl[i];
-                    bool useGouraud = activeShading && !(aModel->texture[pol->texture].attributes & TEX_NO_GOURAUD) &&
+                    bool useGouraud = activeShading && !(source->texture[pol->texture].attributes & TEX_NO_GOURAUD) &&
                                       (pol->SGL_ATTR.atrb & CL_Gouraud);
-                    glBindTexture(GL_TEXTURE_2D, texId[pol->texture]);
-                    if (aModel->texture[pol->texture].attributes & TEX_NO_GOURAUD) glColor4f(1,1,1,1);
+                    glBindTexture(GL_TEXTURE_2D, textureIds[pol->texture]);
+                    if (source->texture[pol->texture].attributes & TEX_NO_GOURAUD) glColor4f(1,1,1,1);
                     if (pol->SGL_ATTR.flag & Dual_Plane) glDisable(GL_CULL_FACE);
                     else glEnable(GL_CULL_FACE);
 
@@ -334,35 +417,46 @@ newUseUV=0;
                         glDisable(GL_POLYGON_STIPPLE);
                     }
 
-                    glBegin(GL_QUADS);
+                    projected_grid::Vertex corners[4] = {};
+                    bool canProject = true;
+                    const bool selected = !reference && isSurfaceSelected(static_cast<int>(m), static_cast<int>(i));
+                    for (unsigned int corner = 0; corner < 4; ++corner)
                     {
-
-                        for (int32_t ii=3; ii>=0; --ii) {
-                            if (newUseUV)
-                                glTexCoord2f(pol->vertUV[ii].U, pol->vertUV[ii].V);
-                            else
-                                glTexCoord2f(SaturnUV[ii*2+(dir*8)], (SaturnUV[(ii*2) + 1 + (dir*8)]));
-                            curVert = &curModel->pntbl[pol->vertIdx[ii]];
-                            float visibility = useGouraud ? previewVertexVisibility(m, pol->vertIdx[ii]) : 1.0f;
-                            float shadow = visibility;
-
-                            if (isSurfaceSelected(static_cast<int>(m), static_cast<int>(i)))
-                                glColor4f(0.75f*shadow,0.25f*shadow,0.25f*shadow,0.66f);
-                            else{
-                                if (useGouraud) {
-                                    const float * intensity = previewVertexColor(m, pol->vertIdx[ii]);
-                                    glColor4f(intensity[0], intensity[1], intensity[2], 1.0f);
-                                } else {
-                                    glColor4f(1.0f,1.0f,1.0f,1.0f);
-                                }
-
-                            }
-                            glVertex3f(curVert->point[X], curVert->point[Y], curVert->point[Z]);
+                        curVert = &curModel->pntbl[pol->vertIdx[corner]];
+                        if (!projected_grid::project(curVert->point, modelView, projection, corners[corner].position))
+                            canProject = false;
+                        corners[corner].uv[0] = SaturnUV[corner * 2 + dir * 8];
+                        corners[corner].uv[1] = SaturnUV[corner * 2 + 1 + dir * 8];
+                        if (selected)
+                        {
+                            const float visibility = useGouraud ? previewVertexVisibility(m, pol->vertIdx[corner]) : 1.0f;
+                            corners[corner].color[0] = 0.75f * visibility;
+                            corners[corner].color[1] = 0.25f * visibility;
+                            corners[corner].color[2] = 0.25f * visibility;
+                            corners[corner].color[3] = 0.66f;
                         }
-
+                        else
+                        {
+                            const float * intensity = useGouraud ? previewVertexColor(m, pol->vertIdx[corner]) : NULL;
+                            for (unsigned int channel = 0; channel < 3; ++channel)
+                                corners[corner].color[channel] = intensity ? intensity[channel] : 1.0f;
+                            corners[corner].color[3] = 1.0f;
+                        }
                     }
-                    glEnd();
-                    renderShadow(curModel, pol);
+                    if (canProject)
+                        renderProjectedGrid(corners, viewport[2], viewport[3], (DisplayTEST & 1) != 0);
+                    else
+                    {
+                        glBegin(GL_QUADS);
+                        for (int corner = 3; corner >= 0; --corner)
+                        {
+                            glColor4fv(corners[corner].color);
+                            glTexCoord2fv(corners[corner].uv);
+                            glVertex3fv(curModel->pntbl[pol->vertIdx[corner]].point);
+                        }
+                        glEnd();
+                    }
+                    renderShadow(curModel, pol, aModel->BoxMax[Y]);
                 }
             }
 render2D(&aModel->model[0]);

@@ -1,5 +1,32 @@
 #include "../COMMON.H"
 
+bool applyAnimationPose(animated_model_t * model, const animationControl_t & control, bool clamp, bool interpolate)
+{
+    if (!model || !model->keyFrames || !model->nbFrames) return false;
+    const unsigned int frameUnit = 1u << MIN(control.fps, 10);
+    unsigned int frame = control.currentFrm / frameUnit;
+    float fraction = static_cast<float>(control.currentFrm % frameUnit) / frameUnit;
+    if (frame >= model->nbFrames)
+    {
+        frame = model->nbFrames - 1;
+        fraction = 0.0f;
+    }
+    unsigned int next = frame + 1;
+    if (clamp) next = MIN(next, model->nbFrames - 1);
+    else if (next >= MIN(control.endFrm, model->nbFrames)) next = control.startFrm;
+    if (next >= model->nbFrames) next = frame;
+    const vertex_t * first = model->keyFrames[frame].cVert;
+    const vertex_t * second = model->keyFrames[next].cVert;
+    if (!first || !second) return false;
+    if (!interpolate) fraction = 0.0f;
+    unsigned int offset = 0;
+    for (unsigned int mesh = 0; mesh < model->nbModels; ++mesh)
+        for (unsigned int point = 0; point < model->model[mesh].nbPoint; ++point, ++offset)
+            for (unsigned int axis = 0; axis < XYZ; ++axis)
+                model->model[mesh].pntbl[point].point[axis] = first[offset].point[axis] +
+                    (second[offset].point[axis] - first[offset].point[axis]) * fraction;
+    return true;
+}
 
 uint16_t         swap_endian_ushort(uint16_t value)   { return ((((value) >> 8) & 0xff) | (((value) & 0xff) << 8));}
 int16_t          swap_endian_sshort( int16_t value)   { return (((value >> 8)&0xFF) | ((value & 0xFF) << 8));}
@@ -39,7 +66,7 @@ void calculateBoundingBox(float * boxMin, float * boxMax, vertex_t * vertexArray
         {
             if (v->point[ii] < boxMin[ii])
                 boxMin[ii]=v->point[ii];
-            else if (v->point[ii] > boxMax[ii])
+            if (v->point[ii] > boxMax[ii])
                 boxMax[ii]=v->point[ii];
         }
         v++;

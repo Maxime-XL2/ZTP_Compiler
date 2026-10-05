@@ -1,2 +1,1 @@
 ZTP_Compiler.exe 40 0 40 1 1 BRUTE/ BRUTE
-PAUSE

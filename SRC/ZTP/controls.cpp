@@ -456,6 +456,13 @@ int selectedSortMode(animated_model_t * model)
     return polygon ? polygon->SGL_ATTR.sorting & 3 : -1;
 }
 
+static uint32_t editRevision = 0;
+
+uint32_t surfaceEditRevision()
+{
+    return editRevision;
+}
+
 bool setSelectedSurfaceOption(animated_model_t * model, surface_edit_operation operation, bool enabled)
 {
     bool changed = false;
@@ -463,14 +470,14 @@ bool setSelectedSurfaceOption(animated_model_t * model, surface_edit_operation o
          selected != selectedSurfaces.end(); ++selected)
         changed = assignSurfaceOption(getSurface(model, selected->first, selected->second), operation, enabled) || changed;
     if (!selectedSurfaces.empty()) {
-        if (changed) ++selectionRevision;
+        if (changed) { ++selectionRevision; ++editRevision; }
         return changed;
     }
 
     extern int activeFace;
     extern int activeModel;
     changed = assignSurfaceOption(getSurface(model, activeModel, activeFace), operation, enabled);
-    if (changed) ++selectionRevision;
+    if (changed) { ++selectionRevision; ++editRevision; }
     return changed;
 }
 
@@ -485,14 +492,14 @@ bool editSelectedSurface(animated_model_t * model, surface_edit_operation operat
          selected != selectedSurfaces.end(); ++selected)
         changed = applySurfaceOperation(getSurface(model, selected->first, selected->second), operation) || changed;
     if (!selectedSurfaces.empty()) {
-        if (changed) ++selectionRevision;
+        if (changed) { ++selectionRevision; ++editRevision; }
         return changed;
     }
 
     extern int activeFace;
     extern int activeModel;
     changed = applySurfaceOperation(getSurface(model, activeModel, activeFace), operation);
-    if (changed) ++selectionRevision;
+    if (changed) { ++selectionRevision; ++editRevision; }
     return changed;
 }
 
@@ -503,7 +510,7 @@ int keyboard_controls(player_t * player, animated_model_t * model)
     /*for (int i=0; i<model->model[0]->nbPolygon; i++){
         render
     }*/
-    if (m_keys[27].bHeld || m_keys['O'].bHeld /*|| m_keys['Q'].bHeld*/) return -1;
+    if (m_keys['O'].bPressed) return -1;
         extern int activeFace;
         extern int activeModel;
     if (m_keys['P'].bPressed){

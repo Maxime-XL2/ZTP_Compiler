@@ -150,7 +150,7 @@ uint16_t getColor(float * color)
     return GRTBL(rgb[0],rgb[1],rgb[2]);
 }
 
-void WRITE_ZPDATA(ofstream * file, animated_model_t * aModel)
+void WRITE_ZPDATA(ofstream * file, animated_model_t * aModel, bool preserveLoadedZTP = false)
 {
     uint16_t startPt=0;
     uint16_t startPol=0;
@@ -188,7 +188,8 @@ void WRITE_ZPDATA(ofstream * file, animated_model_t * aModel)
                 }
                 //Get color for now, to be changed with a cool precalculated table instead
                 ///writeUint8(file, ((uint8_t)getColor(m->pntbl[ii].color)&0x1F));
-                writeUint8(file, (uint8_t)normalLookUp((float*)&m->pntbl[ii].normal[X]));
+                writeUint8(file, preserveLoadedZTP ? static_cast<uint8_t>(m->pntbl[ii].normalArray) :
+                    normalLookUp((float*)&m->pntbl[ii].normal[X]));
             }
         }
     } //else
@@ -205,13 +206,17 @@ void WRITE_ZPDATA(ofstream * file, animated_model_t * aModel)
             {
                 aModel->model[ii].pntbl = &aModel->keyFrames[i].cVert[v_count];
                 v_count += aModel->model[ii].nbPoint;
-                recalculateNormals(&aModel->model[ii]);
-                pointNormals(&aModel->model[ii]);
-                calcLight(aModel);
+                if (!preserveLoadedZTP)
+                {
+                    recalculateNormals(&aModel->model[ii]);
+                    pointNormals(&aModel->model[ii]);
+                    calcLight(aModel);
+                }
                 for (unsigned int k=0; k<(aModel->model[ii].nbPoint); k++) {
                     for (unsigned int j=0; j<3; j++) {
                         writeSint8(file, (int8_t)roundCVert(aModel->model[ii].pntbl[k].point[j]));}
-                writeUint8(file, (uint8_t)normalLookUp((float*)&aModel->model[ii].pntbl[k].normal[X]));
+                writeUint8(file, preserveLoadedZTP ? static_cast<uint8_t>(aModel->model[ii].pntbl[k].normalArray) :
+                    normalLookUp((float*)&aModel->model[ii].pntbl[k].normal[X]));
                 }
             }
 
@@ -241,7 +246,7 @@ void WRITE_ZPDATA(ofstream * file, animated_model_t * aModel)
             writeUint16(file, (pol->SGL_ATTR.dir&0x0FFF) |((pol->SGL_ATTR.sorting&3)<<12)
                         | ((pol->SGL_ATTR.flag&1)<<11));
             writeUint16(file, (pol->SGL_ATTR.atrb) /*|(((pol->isMask^1)&1)<<13)*/); //if isMask==1, the polygon is disposable at long range
-            writeUint16(file, t->SGL_ATTR.colno);
+            writeUint16(file, preserveLoadedZTP ? pol->SGL_ATTR.colno : t->SGL_ATTR.colno);
         }
         startPt+=m->nbPoint;
     }
@@ -333,7 +338,7 @@ uint16_t getPaletteID(animated_model_t * aModel, texture_t * t, unsigned int idx
     return bestRes;
 }
 unsigned short convert_to_4bpp(unsigned short a, unsigned short b){    return (((a&0xff)<<4) | (b));}
-void WRITE_TEXTURES(ofstream * file, animated_model_t * aModel)
+void WRITE_TEXTURES(ofstream * file, animated_model_t * aModel, bool writeDebug = true)
 {
     cout << "Writing the textures to binary file...\n\n";
    // uint16_t buf16;
@@ -427,6 +432,7 @@ void WRITE_TEXTURES(ofstream * file, animated_model_t * aModel)
 
 
 
+    if (!writeDebug) return;
     cout << "Writing the textures to text file (for debugging)...\n\n";
     ofstream tFile("OUT/TEXTURES.TXT", ios::out);
     if (!tFile.is_open()) {cout << "ERROR WRITING TEXT FILE TEXTURE DATA...\n"; return;}
@@ -447,7 +453,7 @@ void WRITE_TEXTURES(ofstream * file, animated_model_t * aModel)
         tFile << t->width << ", " << t->height << ", \n{\n";
         for (unsigned int ii=0; ii<t->height*t->width; ii+=8)
         {
-            for (unsigned int j=0; j<8; j++)
+            for (unsigned int j=0; j<8 && ii+j<t->height*t->width; j++)
             {
                 tFile << "C_RGB(" << (int)(t->pixel[ii+j].rgb&0x1F) << ", " <<
                 (int)((t->pixel[ii+j].rgb>>5)&0x1F)  << ", " <<
@@ -530,14 +536,17 @@ void writeAnim(ofstream * file, animated_model_t * aModel, unsigned int FrameID)
 /********************************
 * WIP : Writes data to custom binary format
 *********************************/
-void write_model_binary(ofstream * file, animated_model_t * aModel)
+void write_model_binary(ofstream * file, animated_model_t * aModel, bool preserveLoadedZTP)
 {
+    const int previousSgl = USE_SGL;
+    if (preserveLoadedZTP) USE_SGL = 0;
     WRITE_MDATA(file, aModel);
-    WRITE_TEXTURES(file, aModel);
+    WRITE_TEXTURES(file, aModel, !preserveLoadedZTP);
     if (USE_SGL==1)
         WRITE_SGL_PDATA(file, aModel);
     else {
-        WRITE_ZPDATA(file, aModel);
+        WRITE_ZPDATA(file, aModel, preserveLoadedZTP);
+        USE_SGL = previousSgl;
         return;
     }
 
@@ -562,6 +571,35 @@ void write_model_binary(ofstream * file, animated_model_t * aModel)
             aModel->model[i].pntbl = v[i];
         }
     }
+    USE_SGL = previousSgl;
+}
+
+void write_model_binary(ofstream * file, animated_model_t * aModel)
+{
+    write_model_binary(file, aModel, false);
+}
+
+bool saveZTPFile(const string & path, animated_model_t * model)
+{
+    if (!model || !model->nbModels) return false;
+    char destination[MAX_PATH] = {}, temporary[MAX_PATH] = {};
+    DWORD length = GetFullPathNameA(path.c_str(), MAX_PATH, destination, NULL);
+    if (!length || length >= MAX_PATH) return false;
+    const string fullPath = destination;
+    const string folder = fullPath.substr(0, fullPath.find_last_of("\\/"));
+    if (!GetTempFileNameA(folder.c_str(), "ztp", 0, temporary)) return false;
+    ofstream output(temporary, ios::binary | ios::trunc);
+    bool written = output.is_open();
+    if (written)
+    {
+        write_model_binary(&output, model, true);
+        output.close();
+        written = output.good();
+    }
+    const bool saved = written && MoveFileExA(temporary, destination,
+        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    if (!saved) DeleteFileA(temporary);
+    return saved;
 }
 
 

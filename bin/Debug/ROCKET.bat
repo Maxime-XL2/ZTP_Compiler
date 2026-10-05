@@ -1,2 +1,1 @@
 ZTP_Compiler.exe 0 0 32 1 1 UNREAL/ ROCKET
-PAUSE

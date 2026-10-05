@@ -1,6 +1,7 @@
 #include "../COMMON.H"
 #include <algorithm>
 #include <vector>
+#include <cctype>
 /*****
 CREDIT FOR TGA LOADING FUNCTIONS : JOHANNES FETZ, JO ENGINE
 DIRTY ADAPTATION BY XL2
@@ -260,8 +261,52 @@ void createFakeTexture(texture_t * t)
 }
 
 /**TO DO : ADD RLE SUPPORT */
-int ReadTGAFile (string folder, texture_t * texture)
+int ReadTGAFile (string folder, texture_t * texture, string sourcePath = "")
 {
+    const auto fallback = [&]() -> int
+    {
+        if (!sourcePath.empty())
+        {
+            cout << "WARNING: Cannot load MTL texture " << sourcePath << "; trying legacy texture " << texture->name << ".TGA\n";
+            return ReadTGAFile(folder, texture);
+        }
+        createFakeTexture(texture);
+        return -1;
+    };
+    if (!sourcePath.empty())
+    {
+        const std::size_t dot = sourcePath.find_last_of('.');
+        string extension = dot == string::npos ? "" : sourcePath.substr(dot);
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+            [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+        if (extension == ".png")
+        {
+            std::vector<unsigned char> image;
+            unsigned int width = 0, height = 0;
+            const unsigned int error = lodepng::decode(image, width, height, sourcePath);
+            if (error || width == 0 || height == 0) return fallback();
+            texture->width = width;
+            texture->height = height;
+            texture->pixel = new pixel_t[width * height]();
+            for (unsigned int row = 0; row < height; ++row)
+                for (unsigned int column = 0; column < width; ++column)
+                {
+                    const unsigned int sourceRow = useUV ? height - 1 - row : row;
+                    const unsigned int source = (sourceRow * width + column) * 4;
+                    pixel_t & pixel = texture->pixel[row * width + column];
+                    pixel.r = image[source];
+                    pixel.g = image[source + 1];
+                    pixel.b = image[source + 2];
+                    pixel.a = image[source + 3];
+                    pixel.rgb = pixel.a < 8 ? 0 : C_RGB(pixel.r / 8, pixel.g / 8, pixel.b / 8);
+                }
+            FillPalette(texture, -1);
+            textureSpecialAttributes(texture);
+            cout << "MTL texture " << sourcePath << ", size: " << width << "x" << height << "\n";
+            return 1;
+        }
+        if (extension != ".tga") return fallback();
+    }
 
 /**PNG**/
 #if 0
@@ -304,27 +349,25 @@ texture->pixel = new pixel_t[height*width];
 /**TGA**/
     //cout << "\nAttempting to read TGA texture files...\n";
     string name;
-    name =  folder + texture->name + ".TGA"; //Temporary : Will break under several conditions
+    name = sourcePath.empty() ? folder + texture->name + ".TGA" : sourcePath;
     TGA_HEADER header = {};
     ifstream ibinfile(name.c_str(), ios::in | ios::binary);
 
     if (!ibinfile.is_open())
         {
-            cout << "ERROR : COULDN'T LOAD FILE " << texture->name.c_str() << ".TGA, creating a sad face texture\n";
-            createFakeTexture(texture);
-            return -1;
+            cout << "ERROR : COULDN'T LOAD FILE " << name << "\n";
+            return fallback();
         }
 
     if (!ReadTGAHeader(&ibinfile, &header) || header.width <= 0 || header.height <= 0 ||
         header.colourmaptype != 0 || (header.bitsperpixel != 24 && header.bitsperpixel != 32))
     {
         cout << "ERROR : INVALID OR UNSUPPORTED TGA HEADER " << name << "\n";
-        createFakeTexture(texture);
-        return -1;
+        return fallback();
     }
         cout << "Texture " << texture->name << ", size : " << header.width << "x" << header.height << ", pixel depth : " << header.bitsperpixel << ", RLE = " << header.datatypecode << "\n";
 
-    if (header.datatypecode!=2) {cout << "RLE currently not supported\n"; createFakeTexture(texture); return -1;}
+    if (header.datatypecode!=2) {cout << "RLE currently not supported\n"; return fallback();}
     texture->width = header.width;
     texture->height = header.height;
     texture->pixel = new pixel_t[header.height*header.width]();
@@ -335,8 +378,7 @@ texture->pixel = new pixel_t[height*width];
         cout << "ERROR : INCOMPLETE TGA PIXEL DATA " << name << "\n";
         delete [] texture->pixel;
         texture->pixel = NULL;
-        createFakeTexture(texture);
-        return -1;
+        return fallback();
     }
     ibinfile.close();
 
@@ -392,6 +434,44 @@ int uvCompare(polygon_t * pol1, polygon_t * pol2){
 
 void rotatePol(polygon_t * pol);
 void textureFlip(polygon_t * pol);
+static bool reuseTriangleTexture(polygon_t * polygon, const polygon_t * reference)
+{
+    for (unsigned int rotation = 0; rotation < 4; ++rotation)
+    {
+        for (unsigned int reflected = 0; reflected < 2; ++reflected)
+        {
+            bool matches = true;
+            for (unsigned int corner = 0; corner < 4 && matches; ++corner)
+            {
+                const unsigned int sourceCorner = (corner + rotation) & 3;
+                const unsigned int referenceCorner = corner ^ reflected;
+                if (fabs(polygon->vertUV[sourceCorner].U - reference->vertUV[referenceCorner].U) > uvTol ||
+                    fabs(polygon->vertUV[sourceCorner].V - reference->vertUV[referenceCorner].V) > uvTol)
+                    matches = false;
+                for (unsigned int other = 0; other < corner && matches; ++other)
+                {
+                    if ((polygon->vertIdx[sourceCorner] == polygon->vertIdx[(other + rotation) & 3]) !=
+                        (reference->vertIdx[referenceCorner] == reference->vertIdx[other ^ reflected]))
+                        matches = false;
+                }
+            }
+            if (!matches) continue;
+
+            const polygon_t original = *polygon;
+            for (unsigned int corner = 0; corner < 4; ++corner)
+            {
+                polygon->vertIdx[corner] = original.vertIdx[(corner + rotation) & 3];
+                polygon->vertUV[corner] = original.vertUV[(corner + rotation) & 3];
+            }
+            polygon->texture = reference->texture;
+            polygon->SGL_ATTR = reference->SGL_ATTR;
+            polygon->SGL_ATTR.dir ^= reflected << 4;
+            return true;
+        }
+    }
+    return false;
+}
+
 int checkExists (polygon_t * pol, animated_model_t * aModel, const string & sourceName){
     for (int m=0; m<aModel->nbModels; m++){
        polygon_t * newPol = &aModel->model[m].pltbl[0];
@@ -399,6 +479,10 @@ int checkExists (polygon_t * pol, animated_model_t * aModel, const string & sour
             if (newPol==pol) return 0;
             if (newPol->texture < 0 || newPol->texture >= static_cast<int>(aModel->nbTextures) ||
                 aModel->texture[newPol->texture].name != sourceName) continue;
+            if (checkIsTriangle(pol) || checkIsTriangle(newPol)) {
+                if (checkIsTriangle(pol) && checkIsTriangle(newPol) && reuseTriangleTexture(pol, newPol)) return 1;
+                continue;
+            }
             if (uvCompare(pol, newPol)){
                 pol->texture = newPol->texture;
                 memcpy(&pol->SGL_ATTR, &newPol->SGL_ATTR, sizeof(ATTR));
