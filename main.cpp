@@ -88,6 +88,8 @@ const int IDC_LOD_REDUCTION = 2161;
 const int IDC_LOD_GENERATE = 2162;
 const int IDC_LOD_SHOW = 2163;
 const int IDC_LOD_STATUS = 2164;
+const int IDC_LOD_LEVEL = 2165;
+const int IDC_LOD_DELETE = 2166;
 const float animationSpeedValues[] = {0.0f, 0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
 const float cameraSpeedValues[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f, 16.0f};
 
@@ -113,6 +115,7 @@ bool currentModelIsZTP = false;
 string ztpSavePath;
 bool ztpSaved = false;
 uint32_t savedEditRevision = 0;
+uint32_t savedLodRevision = 0;
 std::vector<std::vector<vertex_t> > ztpBasePose;
 uint32_t shownSelectionRevision = 0xFFFFFFFFu;
 
@@ -133,6 +136,37 @@ void updateFileMenu(HWND owner)
     DrawMenuBar(owner);
 }
 
+void refreshLodControls(HWND owner, unsigned int selected = 0)
+{
+    SendDlgItemMessageA(owner, IDC_LOD_LEVEL, CB_RESETCONTENT, 0, 0);
+    SendDlgItemMessageA(owner, IDC_LOD_LEVEL, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("Base (LOD 0)"));
+    const unsigned int count = automaticLodLevelCount(currentModel);
+    for (unsigned int level = 1; level <= count; ++level)
+    {
+        char label[48];
+        sprintf(label, "LOD %u (%u%%)", level, currentModel->lodData->levels[level - 1].reduction);
+        SendDlgItemMessageA(owner, IDC_LOD_LEVEL, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
+    }
+    if (selected > count) selected = 0;
+    SendDlgItemMessageA(owner, IDC_LOD_LEVEL, CB_SETCURSEL, selected, 0);
+    EnableWindow(GetDlgItem(owner, IDC_LOD_LEVEL), count != 0);
+    EnableWindow(GetDlgItem(owner, IDC_LOD_SHOW), count != 0);
+    EnableWindow(GetDlgItem(owner, IDC_LOD_DELETE), selected != 0);
+    if (selected) selectAutomaticLod(currentModel, selected);
+    else resetAutomaticLod();
+    CheckDlgButton(owner, IDC_LOD_SHOW, selected ? BST_CHECKED : BST_UNCHECKED);
+    char status[80];
+    if (selected)
+    {
+        unsigned int baseFaces = 0;
+        for (unsigned int mesh = 0; mesh < currentModel->nbModels; ++mesh)
+            baseFaces += currentModel->model[mesh].nbPolygon;
+        sprintf(status, "Faces: %u / %u\r\nUsed points: %u", automaticLodFaceCount(), baseFaces, automaticLodPointCount());
+    }
+    else sprintf(status, "LOD levels: %u", count);
+    SetDlgItemTextA(owner, IDC_LOD_STATUS, status);
+}
+
 void resetModelAnimation(animated_model_t * model)
 {
     resetAutomaticLod();
@@ -147,6 +181,41 @@ void resetModelAnimation(animated_model_t * model)
     resetAnimationPlaybackTiming();
     initializeLightSource(model);
     resetSelfShadowing();
+    refreshLodControls(hwnd);
+}
+
+bool chooseLodGeneration(HWND owner, unsigned int reduction, unsigned int * replaceLevel)
+{
+    if (!reduction)
+    {
+        MessageBoxA(owner, "Choose a reduction between 1 and 99%.", "LOD reduction", MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    const unsigned int count = automaticLodLevelCount(currentModel);
+    *replaceLevel = 0;
+    if (!count) return true;
+    unsigned int matching = 0;
+    for (unsigned int level = 1; level <= count; ++level)
+        if (currentModel->lodData->levels[level - 1].reduction == reduction) matching = level;
+    HMENU menu = CreatePopupMenu();
+    if (!menu) return false;
+    AppendMenuA(menu, MF_STRING | ((matching || count >= 63) ? MF_GRAYED : 0), 1, "Add level");
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    for (unsigned int level = 1; level <= count; ++level)
+    {
+        char label[64];
+        sprintf(label, "Replace LOD %u (%u%%)", level, currentModel->lodData->levels[level - 1].reduction);
+        AppendMenuA(menu, MF_STRING | ((matching && matching != level) ? MF_GRAYED : 0), level + 1, label);
+    }
+    SetMenuDefaultItem(menu, matching ? matching + 1 : 1, FALSE);
+    RECT button;
+    GetWindowRect(GetDlgItem(owner, IDC_LOD_GENERATE), &button);
+    const UINT chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN,
+        button.left, button.bottom, 0, owner, NULL);
+    DestroyMenu(menu);
+    if (!chosen) return false;
+    *replaceLevel = chosen - 1;
+    return true;
 }
 
 void addControl(HWND dialog, const char * className, const char * text, DWORD style,
@@ -215,7 +284,11 @@ void createSidePanel(HWND parent)
     SendDlgItemMessageA(parent, IDC_LOD_REDUCTION, TBM_SETPOS, TRUE, 75);
     addControl(parent, "BUTTON", "Generate LOD", BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 10, 10, IDC_LOD_GENERATE);
     addControl(parent, "BUTTON", "Show LOD", BS_AUTOCHECKBOX | WS_TABSTOP, 0, 0, 10, 10, IDC_LOD_SHOW);
+    addControl(parent, "BUTTON", "Delete LOD", BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 10, 10, IDC_LOD_DELETE);
+    EnableWindow(GetDlgItem(parent, IDC_LOD_DELETE), FALSE);
     addControl(parent, "STATIC", "LOD: not generated", SS_LEFT, 0, 0, 10, 10, IDC_LOD_STATUS);
+    addControl(parent, "COMBOBOX", "", CBS_DROPDOWNLIST | WS_TABSTOP, 0, 0, 10, 10, IDC_LOD_LEVEL);
+    EnableWindow(GetDlgItem(parent, IDC_LOD_LEVEL), FALSE);
     EnableWindow(GetDlgItem(parent, IDC_LOD_SHOW), FALSE);
     EnableWindow(GetDlgItem(parent, IDC_LOD_GENERATE), FALSE);
     SendDlgItemMessageA(parent, IDC_LIGHT_AZIMUTH, TBM_SETRANGEMIN, FALSE, -360);
@@ -250,7 +323,7 @@ void createSidePanel(HWND parent)
         IDC_ANIMATION_SPEED_LABEL, IDC_ANIMATION_SPEED, IDC_CAMERA_SPEED_LABEL, IDC_CAMERA_SPEED,
         IDC_WIREFRAME, IDC_SELF_SHADOWING, IDC_LIGHT_AZIMUTH_LABEL, IDC_LIGHT_AZIMUTH,
         IDC_LIGHT_ELEVATION_LABEL, IDC_LIGHT_ELEVATION,
-        IDC_LOD_REDUCTION_LABEL, IDC_LOD_REDUCTION, IDC_LOD_GENERATE, IDC_LOD_SHOW, IDC_LOD_STATUS
+        IDC_LOD_REDUCTION_LABEL, IDC_LOD_REDUCTION, IDC_LOD_GENERATE, IDC_LOD_SHOW, IDC_LOD_STATUS, IDC_LOD_LEVEL, IDC_LOD_DELETE
     };
     for (unsigned int i = 0; i < sizeof(controlIds) / sizeof(controlIds[0]); ++i)
         SendDlgItemMessageA(parent, controlIds[i], WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
@@ -295,9 +368,11 @@ void layoutSidePanel(HWND parent)
         {IDC_LIGHT_ELEVATION, 174, 583, 146, 26},
         {IDC_LOD_REDUCTION_LABEL, 20, 614, 146, 22},
         {IDC_LOD_REDUCTION, 174, 611, 146, 26},
-        {IDC_LOD_GENERATE, 20, 642, 146, 26},
-        {IDC_LOD_SHOW, 174, 642, 146, 26},
-        {IDC_LOD_STATUS, 20, 673, width - 24, 30},
+        {IDC_LOD_GENERATE, 20, 642, 100, 26},
+        {IDC_LOD_SHOW, 128, 642, 84, 26},
+        {IDC_LOD_DELETE, 220, 642, 100, 26},
+        {IDC_LOD_STATUS, 20, 673, 146, 32},
+        {IDC_LOD_LEVEL, 174, 673, 146, 160},
         {IDM_COMPARISON_OPEN, 20, 709, 146, 26},
         {IDM_COMPARISON_REMOVE, 174, 709, 146, 26},
         {IDC_COMPARISON_FILE, 20, 741, width - 24, 36}
@@ -350,10 +425,9 @@ void updateSurfacePanel(HWND parent, animated_model_t * model)
     char status[96];
     sprintf(status, "Model %d  |  Polygon %d  |  %u selected", activeModel + 1, activeFace + 1, selectedSurfaceCount());
     SetDlgItemTextA(parent, IDC_SURFACE_STATUS, status);
-    const char * sortingModes[] = {"SORT_BFR", "SORT_MIN", "SORT_MAX", "SORT_CEN"};
     char sortingStatus[48];
     int sortMode = selectedSortMode(model);
-    sprintf(sortingStatus, "Sort mode: %s", sortMode < 0 ? "MIXED" : sortingModes[sortMode]);
+    sprintf(sortingStatus, "Sort mode: %s", sortMode < 0 ? "MIXED" : sortingModeName(sortMode));
     SetDlgItemTextA(parent, IDC_SORT_STATUS, sortingStatus);
     const int optionControls[] = {
         IDC_SURFACE_DOUBLE_SIDED, IDC_SURFACE_UV_DIRECTION, IDC_SURFACE_MESH,
@@ -540,7 +614,7 @@ bool loadZTPModel(const string &path, const string &fileName, HWND owner)
     animated_model_t *nextModel = loadZTPFile(path);
     if (!nextModel)
     {
-        MessageBoxA(owner, "Could not read this file as a useSGL = 0 ZTP model.", "ZTP load failed",
+        MessageBoxA(owner, "Could not read this ZTP model (legacy or ZTP_Z01/ZTP_S01).", "ZTP load failed",
                     MB_OK | MB_ICONERROR);
         return false;
     }
@@ -554,12 +628,13 @@ bool loadZTPModel(const string &path, const string &fileName, HWND owner)
     currentFolder = ztpSavePath;
     ztpSaved = false;
     savedEditRevision = surfaceEditRevision();
+    savedLodRevision = currentModel->lodData ? currentModel->lodData->revision : 0;
     ztpBasePose.resize(currentModel->nbModels);
     for (unsigned int mesh = 0; mesh < currentModel->nbModels; ++mesh)
         ztpBasePose[mesh].assign(currentModel->model[mesh].pntbl,
             currentModel->model[mesh].pntbl + currentModel->model[mesh].nbPoint);
     updateFileMenu(owner);
-    USE_SGL = 0;
+    USE_SGL = currentModel->sourceSgl;
     fileOutName = fileName.substr(0, fileName.find_last_of('.'));
     if (fileOutName.empty()) fileOutName = "model";
     clearSelectedSurfaces();
@@ -631,6 +706,7 @@ bool saveCurrentZTP(HWND owner, bool saveAs)
     fileOutName = currentFile.substr(0, currentFile.find_last_of('.'));
     ztpSaved = true;
     savedEditRevision = surfaceEditRevision();
+    savedLodRevision = currentModel->lodData ? currentModel->lodData->revision : 0;
     SetWindowTextA(owner, ("ZTP Converter - " + currentFile).c_str());
     updateSurfacePanel(owner, currentModel);
     return true;
@@ -639,7 +715,8 @@ bool saveCurrentZTP(HWND owner, bool saveAs)
 bool confirmZTPSave(HWND owner)
 {
     if (!currentModelIsZTP || !currentModel ||
-        (ztpSaved && savedEditRevision == surfaceEditRevision())) return true;
+        (ztpSaved && savedEditRevision == surfaceEditRevision() &&
+         savedLodRevision == (currentModel->lodData ? currentModel->lodData->revision : 0))) return true;
     int answer = MessageBoxA(owner, "Save the current ZTP file before continuing?",
         "Unsaved ZTP", MB_YESNOCANCEL | MB_ICONQUESTION);
     if (answer == IDCANCEL) return false;
@@ -689,7 +766,7 @@ bool loadComparison(const string & fullPath, const string & folder, const string
     if (!nextModel || !nextModel->nbModels || !nextModel->nbTextures)
     {
         deleteModels(nextModel);
-        MessageBoxA(owner, "Could not read this reference (ZTP requires useSGL = 0).",
+        MessageBoxA(owner, "Could not read this reference model.",
                     "Reference load failed", MB_OK | MB_ICONERROR);
         return false;
     }
@@ -775,6 +852,7 @@ HMENU createMainMenu()
 void deleteModels(animated_model_t * model)
 {
     if (!model) return;
+    delete model->lodData;
     for (unsigned int i=0; i<model->nbModels; i++) {
         delete [] model->model[i].pltbl;
         delete [] model->model[i].pntbl;
@@ -1091,6 +1169,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             if (HIWORD(wParam) == CBN_SELCHANGE)
             {
                 int controlId = LOWORD(wParam);
+                if (controlId == IDC_LOD_LEVEL)
+                {
+                    LRESULT level = SendDlgItemMessageA(hwnd, IDC_LOD_LEVEL, CB_GETCURSEL, 0, 0);
+                    if (level >= 0) refreshLodControls(hwnd, static_cast<unsigned int>(level));
+                    resetSelfShadowing();
+                    clearSelectedSurfaces();
+                    SetFocus(hwnd);
+                    return 0;
+                }
                 if (controlId == IDC_ANIMATION_SPEED || controlId == IDC_CAMERA_SPEED)
                 {
                     LRESULT index = SendDlgItemMessageA(hwnd, controlId, CB_GETCURSEL, 0, 0);
@@ -1152,36 +1239,51 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     if (HIWORD(wParam) == BN_CLICKED && currentModel)
                     {
                         unsigned int reduction = SendDlgItemMessageA(hwnd, IDC_LOD_REDUCTION, TBM_GETPOS, 0, 0);
-                        HCURSOR previousCursor = SetCursor(LoadCursor(NULL, IDC_WAIT));
-                        bool generated = generateAutomaticLod(currentModel, reduction);
-                        SetCursor(previousCursor);
-                        showAutomaticLod = generated;
-                        resetSelfShadowing();
-                        CheckDlgButton(hwnd, IDC_LOD_SHOW, generated ? BST_CHECKED : BST_UNCHECKED);
-                        EnableWindow(GetDlgItem(hwnd, IDC_LOD_SHOW), generated);
-                        unsigned int originalCount = 0;
-                        unsigned int originalPoints = 0;
-                        for (unsigned int mesh = 0; mesh < currentModel->nbModels; ++mesh)
+                        unsigned int replaceLevel = 0;
+                        if (!chooseLodGeneration(hwnd, reduction, &replaceLevel))
                         {
-                            originalCount += currentModel->model[mesh].nbPolygon;
-                            originalPoints += currentModel->model[mesh].nbPoint;
+                            SetFocus(hwnd);
+                            return 0;
                         }
-                        char status[128];
-                        unsigned int lodCount = automaticLodFaceCount();
-                        if (generated)
-                            sprintf(status, "LOD: %u -> %u faces (-%.0f%%)\r\nPoints: %u -> %u", originalCount, lodCount,
-                                originalCount ? 100.0f * (originalCount - lodCount) / originalCount : 0.0f,
-                                originalPoints, automaticLodPointCount());
-                        else sprintf(status, "LOD generation failed");
-                        SetDlgItemTextA(hwnd, IDC_LOD_STATUS, status);
+                        HCURSOR previousCursor = SetCursor(LoadCursor(NULL, IDC_WAIT));
+                        bool generated = generateAutomaticLod(currentModel, reduction, replaceLevel);
+                        SetCursor(previousCursor);
+                        resetSelfShadowing();
+                        unsigned int selected = 0;
+                        if (generated && currentModel->lodData)
+                            for (unsigned int level = 0; level < currentModel->lodData->levels.size(); ++level)
+                                if (currentModel->lodData->levels[level].reduction == reduction) selected = level + 1;
+                        refreshLodControls(hwnd, selected);
+                        if (!generated) SetDlgItemTextA(hwnd, IDC_LOD_STATUS, "LOD generation failed");
                         clearSelectedSurfaces();
+                        SetFocus(hwnd);
+                    }
+                    return 0;
+                case IDC_LOD_DELETE:
+                    if (HIWORD(wParam) == BN_CLICKED && currentModel)
+                    {
+                        LRESULT selected = SendDlgItemMessageA(hwnd, IDC_LOD_LEVEL, CB_GETCURSEL, 0, 0);
+                        if (selected <= 0 || static_cast<unsigned int>(selected) > automaticLodLevelCount(currentModel))
+                            return 0;
+                        char question[96];
+                        sprintf(question, "Delete LOD %u (%u%%)?", static_cast<unsigned int>(selected),
+                            currentModel->lodData->levels[selected - 1].reduction);
+                        if (MessageBoxA(hwnd, question, "Delete LOD", MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) == IDYES &&
+                            deleteAutomaticLod(currentModel, static_cast<unsigned int>(selected)))
+                        {
+                            refreshLodControls(hwnd, MIN(static_cast<unsigned int>(selected), automaticLodLevelCount(currentModel)));
+                            resetSelfShadowing();
+                            clearSelectedSurfaces();
+                        }
                         SetFocus(hwnd);
                     }
                     return 0;
                 case IDC_LOD_SHOW:
                     if (HIWORD(wParam) == BN_CLICKED)
                     {
-                        showAutomaticLod = IsDlgButtonChecked(hwnd, IDC_LOD_SHOW) == BST_CHECKED;
+                        const bool show = IsDlgButtonChecked(hwnd, IDC_LOD_SHOW) == BST_CHECKED;
+                        LRESULT selected = SendDlgItemMessageA(hwnd, IDC_LOD_LEVEL, CB_GETCURSEL, 0, 0);
+                        refreshLodControls(hwnd, show ? static_cast<unsigned int>(MAX(1, selected)) : 0);
                         resetSelfShadowing();
                         clearSelectedSurfaces();
                         SetFocus(hwnd);

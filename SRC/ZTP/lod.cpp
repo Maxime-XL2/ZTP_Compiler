@@ -106,10 +106,20 @@ void resetAutomaticLod()
     lodPointCount = 0;
 }
 
-bool generateAutomaticLod(animated_model_t * model, unsigned int reductionPercent)
+bool generateAutomaticLod(animated_model_t * model, unsigned int reductionPercent, unsigned int replaceLevel)
 {
-    resetAutomaticLod();
     if (!model || !model->model || model->nbModels == 0) return false;
+    reductionPercent = MIN(reductionPercent, 99u);
+    if (replaceLevel)
+    {
+        if (!reductionPercent || replaceLevel > automaticLodLevelCount(model)) return false;
+        for (unsigned int level = 0; level < model->lodData->levels.size(); ++level)
+            if (level + 1 != replaceLevel && model->lodData->levels[level].reduction == reductionPercent)
+                return false;
+    }
+    resetAutomaticLod();
+    for (unsigned int mesh = 0; mesh < model->nbModels; ++mesh)
+        if (model->model[mesh].nbPoint > 256) return false;
     if (model->nbFrames && !model->keyFrames) return false;
     for (unsigned int frame = 0; frame < model->nbFrames; ++frame)
         if (!model->keyFrames[frame].cVert) return false;
@@ -264,6 +274,67 @@ bool generateAutomaticLod(animated_model_t * model, unsigned int reductionPercen
         offset += mesh.nbPoint;
     }
     lodSource = model;
+    if (reductionPercent)
+    {
+        if (!model->lodData) model->lodData = new model_lod_data_t;
+        lod_level_t level;
+        level.reduction = reductionPercent;
+        level.meshes.resize(model->nbModels);
+        for (unsigned int mesh = 0; mesh < model->nbModels; ++mesh)
+        {
+            level.meshes[mesh].faces = lodMeshes[mesh];
+            for (const polygon_t & face : lodMeshes[mesh])
+                for (unsigned int corner = 0; corner < 4; ++corner)
+                    level.meshes[mesh].pointCount = MAX(level.meshes[mesh].pointCount, face.vertIdx[corner] + 1);
+        }
+        auto & levels = model->lodData->levels;
+        auto existing = replaceLevel ? levels.begin() + replaceLevel - 1 : std::find_if(levels.begin(), levels.end(), [&](const lod_level_t & value) {
+            return value.reduction == reductionPercent;
+        });
+        if (existing != levels.end()) *existing = level;
+        else if (levels.size() < 63) levels.push_back(level);
+        else return false;
+        std::sort(levels.begin(), levels.end(), [](const lod_level_t & first, const lod_level_t & second) {
+            return first.reduction < second.reduction;
+        });
+        ++model->lodData->revision;
+    }
+    return true;
+}
+
+unsigned int automaticLodLevelCount(const animated_model_t * model)
+{
+    return model && model->lodData ? static_cast<unsigned int>(model->lodData->levels.size()) : 0;
+}
+
+bool deleteAutomaticLod(animated_model_t * model, unsigned int level)
+{
+    if (!level || level > automaticLodLevelCount(model)) return false;
+    model->lodData->levels.erase(model->lodData->levels.begin() + level - 1);
+    ++model->lodData->revision;
+    if (lodSource == model) resetAutomaticLod();
+    return true;
+}
+
+bool selectAutomaticLod(animated_model_t * model, unsigned int level)
+{
+    if (!level || level > automaticLodLevelCount(model)) return false;
+    resetAutomaticLod();
+    lodSource = model;
+    lodMeshes.resize(model->nbModels);
+    lodPointCount = 0;
+    const lod_level_t & selected = model->lodData->levels[level - 1];
+    if (selected.meshes.size() != model->nbModels) return false;
+    for (unsigned int mesh = 0; mesh < model->nbModels; ++mesh)
+    {
+        lodMeshes[mesh] = selected.meshes[mesh].faces;
+        std::vector<bool> used(model->model[mesh].nbPoint, false);
+        for (const polygon_t & face : lodMeshes[mesh])
+            for (unsigned int corner = 0; corner < 4; ++corner)
+                if (face.vertIdx[corner] < used.size()) used[face.vertIdx[corner]] = true;
+        lodPointCount += std::count(used.begin(), used.end(), true);
+    }
+    showAutomaticLod = true;
     return true;
 }
 

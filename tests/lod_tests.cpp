@@ -82,6 +82,11 @@ int main()
     assert(generateAutomaticLod(&model, 99));
     printf("Animated 99%% target: %u faces, %u points\n", automaticLodFaceCount(), automaticLodPointCount());
     assert(automaticLodFaceCount() <= animatedCount);
+    assert(automaticLodLevelCount(&model) == 2);
+    assert(selectAutomaticLod(&model, 1));
+    assert(automaticLodFaceCount() == animatedCount);
+    assert(selectAutomaticLod(&model, 2));
+    assert(!selectAutomaticLod(&model, 3));
     assert(automaticLodPointCount() < mesh.nbPoint);
     lod = automaticLodFaces(&model, 0, &count);
     for (unsigned int face = 0; face < count; ++face)
@@ -94,6 +99,25 @@ int main()
     assert(std::memcmp(points.data(), originalPoints.data(), points.size() * sizeof(vertex_t)) == 0);
     assert(std::memcmp(faces.data(), originalFaces.data(), faces.size() * sizeof(polygon_t)) == 0);
     std::vector<vertex_t> combinedPoints(3), combinedNext(3);
+    const uint32_t revision = model.lodData->revision;
+    assert(generateAutomaticLod(&model, 90, 2));
+    assert(automaticLodLevelCount(&model) == 2);
+    assert(model.lodData->levels[0].reduction == 75 && model.lodData->levels[1].reduction == 90);
+    assert(model.lodData->revision == revision + 1);
+    assert(!generateAutomaticLod(&model, 75, 2));
+    assert(!generateAutomaticLod(&model, 0, 2));
+    assert(!generateAutomaticLod(&model, 80, 3));
+    assert(model.lodData->revision == revision + 1);
+    assert(!deleteAutomaticLod(&model, 0));
+    assert(!deleteAutomaticLod(&model, 3));
+    assert(deleteAutomaticLod(&model, 1));
+    assert(automaticLodLevelCount(&model) == 1 && model.lodData->levels[0].reduction == 90);
+    assert(selectAutomaticLod(&model, 1));
+    assert(deleteAutomaticLod(&model, 1));
+    assert(automaticLodLevelCount(&model) == 0 && !showAutomaticLod);
+    assert(model.lodData->revision == revision + 3);
+    assert(std::memcmp(points.data(), originalPoints.data(), points.size() * sizeof(vertex_t)) == 0);
+    assert(std::memcmp(faces.data(), originalFaces.data(), faces.size() * sizeof(polygon_t)) == 0);
     combinedPoints.insert(combinedPoints.end(), points.begin(), points.end());
     combinedNext.insert(combinedNext.end(), nextPose.begin(), nextPose.end());
     model_t meshes[2] = {};
@@ -104,6 +128,7 @@ int main()
     combinedFrames[0].cVert = combinedPoints.data();
     combinedFrames[1].cVert = combinedNext.data();
     animated_model_t multiModel = model;
+    multiModel.lodData = NULL;
     multiModel.nbModels = 2;
     multiModel.model = meshes;
     multiModel.keyFrames = combinedFrames;
@@ -124,6 +149,7 @@ int main()
     triangleMesh.nbPolygon = 1;
     triangleMesh.pltbl = &triangle;
     animated_model_t triangleModel = model;
+    triangleModel.lodData = NULL;
     triangleModel.model = &triangleMesh;
     assert(generateAutomaticLod(&triangleModel, 95));
     assert(automaticLodFaceCount() == 1);
@@ -133,5 +159,8 @@ int main()
     assert(!generateAutomaticLod(&model, 75));
     assert(automaticLodFaceCount() == 0);
     assert(!generateAutomaticLod(NULL, 75));
+    delete model.lodData;
+    delete multiModel.lodData;
+    delete triangleModel.lodData;
     puts("LOD tests passed");
 }

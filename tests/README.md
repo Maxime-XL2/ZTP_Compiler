@@ -20,21 +20,21 @@ coordinates, normals, concave pentagons and quads, and rejection of index zero.
 
 ## ZTP loading
 
-The ZTP reader currently supports the `useSGL = 0` layout emitted by
-`writeZTP.cpp`, including 4bpp palette textures, 32K textures, and animation
-frames. It validates mesh ranges and rejects malformed or truncated files.
+The ZTP reader supports identified `ZTP_Z01` / `ZTP_S01` containers and legacy
+unidentified non-SGL/SGL payloads, including textures, animations and multi-LOD
+directories. Every export/save writes the modern identified format.
+Exact offsets and engine migration rules are in [ZTP_FORMAT.md](ZTP_FORMAT.md).
 Working models opened as ZTP expose File > Save and Save as. Save writes to
 the loaded file; Save as chooses a destination and makes it the next Save target.
 Neither command adds a `_TEST` suffix. ZTP models are no longer exported
 automatically on exit. Closing, replacing or reloading a ZTP prompts Yes/No/Cancel
-until the first successful save, and again after subsequent surface edits.
+until the first successful save, and again after surface edits or LOD generation.
 No continues without saving; Cancel (or a failed/cancelled save) keeps the model open.
-Camera, selection, playback, reference and LOD changes are not surface edits.
+Camera, selection, playback, reference and LOD preview selection do not dirty the file.
 Saving uses the original base pose, not the current interpolated preview pose.
 Writes use a temporary file in the destination directory and replace the target
 only after successful writing. Files loaded as references cannot be overwritten.
-The writer explicitly uses
-the non-SGL format and preserves loaded polygon colors and normals instead of
+The writer preserves the loaded Z/S mode, polygon colors and normals instead of
 rebuilding them from shared textures or animated geometry. Compressed normal
 indices are retained for the base mesh and every animation frame.
 OBJ imports retain their existing `OUT/` export directory.
@@ -42,12 +42,12 @@ OBJ imports retain their existing `OUT/` export directory.
 Run the focused reader/writer tests from the workspace root in PowerShell:
 
 ```powershell
-& 'C:\Program Files\CodeBlocks\MinGW\bin\g++.exe' -std=gnu++14 -Wall -static -ffunction-sections -fdata-sections tests/ztp_tests.cpp SRC/ZTP/load.cpp SRC/ZTP/writeZTP.cpp SRC/ZTP/tools.cpp SRC/ZTE/MATH/matrix.cpp '-Wl,--gc-sections' -o obj/Debug/ztp_tests.exe
+& 'C:\Program Files\CodeBlocks\MinGW\bin\g++.exe' -std=gnu++14 -Wall -static -ffunction-sections -fdata-sections tests/ztp_tests.cpp SRC/ZTP/load.cpp SRC/ZTP/writeZTP.cpp SRC/ZTP/tools.cpp SRC/ZTE/MATH/matrix.cpp SRC/ZTP/lod.cpp third_party/meshoptimizer/simplifier.cpp '-Wl,--gc-sections' -o obj/Debug/ztp_tests.exe
 if ($LASTEXITCODE -eq 0) { & .\obj\Debug\ztp_tests.exe }
 ```
 
 The tests cover both texture depths, polygon attributes and indices, keyframe
-positions, and truncated input. Round-trip tests verify unchanged file size,
+positions, and truncated input. Round-trip tests verify the 32-byte migration overhead,
 textures, geometry, bounds, scale, frames and per-polygon attributes for static,
 animated and multi-mesh models, even if the global SGL mode initially equals 1.
 Save tests also check replacement, reloading and failure on a read-only target
@@ -57,8 +57,15 @@ round-trip in an isolated temporary directory without writing its source.
 
 ## Automatic LOD prototype
 
-The native side panel provides a reduction target (0-99%), Generate LOD, and
-Show LOD. Generation switches to the LOD preview; unchecking Show LOD restores
+The native side panel provides a reduction target (0-99%), Generate LOD,
+Show LOD, a level selector and Delete LOD. Generate LOD offers Add level or
+replacement of an explicitly chosen existing level. A reduction already used
+by another level cannot be duplicated. Levels are sorted from finer to coarser,
+so changing a replacement's reduction can change its displayed level number.
+Delete LOD removes the selected added level after confirmation; base level 0
+cannot be deleted. Replacement and deletion mark loaded ZTP files as unsaved.
+All levels are saved with the base model in one ZTP; loaded levels can be previewed.
+Generation switches to the LOD preview; unchecking Show LOD restores
 the original. Moving the slider applies to the next generation. The status
 displays achieved face counts and the number of distinct referenced points.
 
@@ -84,9 +91,10 @@ use the source face color when available, otherwise neutral gray. Generated
 triangles inherit the color and surface attributes of the source face with the
 nearest centroid in the reference pose. Texture animation uses its first image.
 
-This remains a preview with projected ground shadows. The original export path
-and binary layouts are unchanged; the LOD is not exported and is not connected
-to collision or self-shadowing tests. Original animation interpolation still
+LOD faces are exported as solid RGB polygons in the modern format. Saving
+reorders a copy of every mesh and animation frame into shared point prefixes,
+without modifying the working model. They are not connected to collision or
+self-shadowing tests, which still use the base geometry. Preview interpolation still
 updates the full point array; the point count reports references, not a smaller
 keyframe allocation or a reduced interpolation loop. The generator does not
 guarantee volume preservation, a geometric error bound, absence of intersections
@@ -139,7 +147,7 @@ receive separate textures. Failed matches leave the polygon unchanged.
 Load reference (or File > Load visual reference) loads a separate OBJ or ZTP
 alongside the working model, at the same origin and with the same camera.
 OBJ import options are independent; animated OBJ sequences use the existing
-`name_000001.obj` naming convention. ZTP references support `useSGL = 0`.
+`name_000001.obj` naming convention. ZTP references support non-SGL and SGL.
 Remove reference unloads it without changing the working model or its LOD.
 
 The reference is not selectable, editable, exported, or written to disk.

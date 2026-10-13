@@ -10,6 +10,7 @@ using namespace std;
 #include <fstream>
 #include <string>
 #include <sstream>
+#include <vector>
 #include <math.h>
 #include "ZTP/lodepng.h"
 
@@ -51,21 +52,24 @@ typedef     float	VECTOR[XYZ] ;
 
 typedef struct {
     uint8_t	     flag ;
-    uint8_t	     sorting ;
+    uint8_t	     sorting = SORT_CEN;
     uint16_t	 texno ;
     uint16_t	 atrb ;
     uint16_t	 colno ;
     uint16_t	 gstb ;
     uint16_t	 dir ;
 } ATTR ;
-/*
-enum
+inline const char * sortingModeName(unsigned int sorting)
 {
-    SORT_MIN = 0,
-    SORT_CEN = 1,
-    SORT_MAX = 2,
-    SORT_BFR = 3
-};*/
+    switch (sorting & 3)
+    {
+        case SORT_BFR: return "SORT_BFR";
+        case SORT_MIN: return "SORT_MIN";
+        case SORT_MAX: return "SORT_MAX";
+        case SORT_CEN: return "SORT_CEN";
+    }
+    return "INVALID";
+}
 
 enum
 {
@@ -172,6 +176,25 @@ typedef struct
 } texture_t;
 
 
+struct lod_mesh_t
+{
+    unsigned int pointCount = 0;
+    std::vector<polygon_t> faces;
+};
+
+struct lod_level_t
+{
+    unsigned int reduction = 0;
+    std::vector<lod_mesh_t> meshes;
+};
+
+struct model_lod_data_t
+{
+    std::vector<lod_level_t> levels;
+    std::vector<std::vector<uint8_t> > sglFrameNormals;
+    uint32_t revision = 0;
+};
+
 typedef struct
 {
     unsigned int    framerate;
@@ -186,6 +209,8 @@ typedef struct
     float           BoxMin[3]; //Bounding box min point
     float           BoxMax[3]; //Bounding box max point
     float           scale[3];
+    model_lod_data_t * lodData;
+    unsigned int    sourceSgl;
 } animated_model_t;
 
 enum surface_edit_operation
@@ -257,10 +282,13 @@ bool            saveZTPFile(const string & path, animated_model_t * model);
 bool            rayIntersectsPolygon(const float * origin, const float * direction, const model_t * mesh,
                                      const polygon_t * polygon, float minimumDistance);
 void            resetAutomaticLod();
-bool            generateAutomaticLod(animated_model_t * model, unsigned int reductionPercent);
+bool            generateAutomaticLod(animated_model_t * model, unsigned int reductionPercent, unsigned int replaceLevel = 0);
+bool            deleteAutomaticLod(animated_model_t * model, unsigned int level);
 const polygon_t * automaticLodFaces(const animated_model_t * model, unsigned int meshIndex, unsigned int * count);
 unsigned int    automaticLodFaceCount();
 unsigned int    automaticLodPointCount();
+unsigned int    automaticLodLevelCount(const animated_model_t * model);
+bool            selectAutomaticLod(animated_model_t * model, unsigned int level);
 extern bool     showAutomaticLod;
 void            resetSelfShadowing();
 bool            applyAnimationPose(animated_model_t * model, const animationControl_t & control, bool clamp, bool interpolate = true);

@@ -485,7 +485,7 @@ void WRITE_TEXTURES(ofstream * file, animated_model_t * aModel, bool writeDebug 
 /**
 Writes the vertex data and compressed normals (to keep SGL happy)
 **/
-void writeAnim(ofstream * file, animated_model_t * aModel, unsigned int FrameID)
+void writeAnim(ofstream * file, animated_model_t * aModel, unsigned int FrameID, bool preserveLoaded = false)
 {
     if (!USE_SGL) return;
 
@@ -520,7 +520,10 @@ void writeAnim(ofstream * file, animated_model_t * aModel, unsigned int FrameID)
 
     for (unsigned int i=0; i< aModel->nbModels; i++ ) {
         for (unsigned int ii=0; ii<(aModel->model[i].nbPolygon); ii++) {
-            bUint8 = (uint8_t)normalLookUp((float*)&aModel->model[i].pltbl[ii].normal[X]); //baseModel->animation[FrameID].cNorm[tot_normals]=(uint8_t)(normalLookUp(kfModel->pol[i].pltbl[ii].norm));
+            if (preserveLoaded && aModel->lodData && FrameID < aModel->lodData->sglFrameNormals.size() &&
+                tot_normals < aModel->lodData->sglFrameNormals[FrameID].size())
+                bUint8 = aModel->lodData->sglFrameNormals[FrameID][tot_normals];
+            else bUint8 = normalLookUp((float*)&aModel->model[i].pltbl[ii].normal[X]);
             file->write((char*)&bUint8, sizeof(uint8_t));
             tot_normals++;
         }
@@ -536,16 +539,175 @@ void writeAnim(ofstream * file, animated_model_t * aModel, unsigned int FrameID)
 /********************************
 * WIP : Writes data to custom binary format
 *********************************/
+static void finishModernZTP(ofstream * file, std::streampos start, animated_model_t * model)
+{
+    const uint32_t modelBytes = static_cast<uint32_t>(file->tellp() - start - std::streamoff(32));
+    const unsigned int additional = model->lodData ? model->lodData->levels.size() : 0;
+    uint32_t lodOffset = 0, lodBytes = 0;
+    if (additional)
+    {
+        while (static_cast<std::streamoff>(file->tellp()) % 4) writeUint8(file, 0);
+        lodOffset = static_cast<uint32_t>(file->tellp());
+        const unsigned int entries = (additional + 1) * model->nbModels;
+        for (unsigned int entry = 0; entry < entries * 4; ++entry) writeUint32(file, 0);
+        for (unsigned int level = 0; level <= additional; ++level)
+            for (unsigned int mesh = 0; mesh < model->nbModels; ++mesh)
+            {
+                const lod_mesh_t * lod = level ? &model->lodData->levels[level - 1].meshes[mesh] : NULL;
+                const uint32_t faceOffset = lod && !lod->faces.empty() ? static_cast<uint32_t>(file->tellp()) : 0;
+                if (lod)
+                    for (const polygon_t & face : lod->faces)
+                    {
+                        for (unsigned int corner = 0; corner < 4; ++corner) writeUint8(file, face.vertIdx[corner]);
+                        writeUint16(file, 0xFFFF);
+                        writeUint16(file, FUNC_Polygon | ((face.SGL_ATTR.sorting & 3) << 12) |
+                            ((face.SGL_ATTR.flag & 1) << 11));
+                        writeUint16(file, (face.SGL_ATTR.atrb & ~0x38u) | 0x28u);
+                        writeUint16(file, face.color.rgb);
+                    }
+                const std::streampos end = file->tellp();
+                file->seekp(lodOffset + (level * model->nbModels + mesh) * 16);
+                writeUint16(file, lod ? lod->pointCount : model->model[mesh].nbPoint);
+                writeUint16(file, lod ? 1 : 0);
+                writeUint32(file, lod ? lod->faces.size() : model->model[mesh].nbPolygon);
+                writeUint32(file, faceOffset);
+                writeUint16(file, level ? model->lodData->levels[level - 1].reduction : 0);
+                writeUint16(file, 0);
+                file->seekp(end);
+            }
+        lodBytes = static_cast<uint32_t>(file->tellp()) - lodOffset;
+    }
+    const std::streampos end = file->tellp();
+    file->seekp(start + std::streamoff(12));
+    writeUint32(file, modelBytes);
+    writeUint32(file, lodOffset);
+    writeUint32(file, lodBytes);
+    writeUint16(file, additional + 1);
+    writeUint16(file, model->nbModels);
+    writeUint32(file, additional ? 1 : 0);
+    file->seekp(end);
+}
+
 void write_model_binary(ofstream * file, animated_model_t * aModel, bool preserveLoadedZTP)
 {
     const int previousSgl = USE_SGL;
-    if (preserveLoadedZTP) USE_SGL = 0;
+    if (preserveLoadedZTP) USE_SGL = aModel->sourceSgl;
+    if (USE_SGL != 0 && USE_SGL != 1) { file->setstate(ios::failbit); USE_SGL = previousSgl; return; }
+    unsigned int totalPoints = 0, totalFaces = 0;
+    if (!aModel->nbModels || aModel->nbModels > 256 || aModel->nbTextures > 1280 ||
+        (aModel->lodData && aModel->lodData->levels.size() > 63))
+    { file->setstate(ios::failbit); USE_SGL = previousSgl; return; }
+    for (unsigned int mesh = 0; mesh < aModel->nbModels; ++mesh)
+    {
+        const model_t & part = aModel->model[mesh];
+        if (part.nbPoint > (USE_SGL ? 65535u : 256u) || part.nbPolygon > maxPolygons ||
+            (part.nbPoint && !part.pntbl) || (part.nbPolygon && !part.pltbl))
+        { file->setstate(ios::failbit); USE_SGL = previousSgl; return; }
+        totalPoints += part.nbPoint;
+        totalFaces += part.nbPolygon;
+        for (unsigned int face = 0; face < part.nbPolygon; ++face)
+        {
+            if (part.pltbl[face].texture < 0 || static_cast<unsigned int>(part.pltbl[face].texture) >= aModel->nbTextures)
+            { file->setstate(ios::failbit); USE_SGL = previousSgl; return; }
+            for (unsigned int corner = 0; corner < 4; ++corner)
+                if (part.pltbl[face].vertIdx[corner] >= part.nbPoint)
+                { file->setstate(ios::failbit); USE_SGL = previousSgl; return; }
+        }
+    }
+    if (!totalPoints || totalPoints > 65535 || totalFaces > maxPolygons || aModel->nbFrames > 65535 ||
+        uint64_t(totalPoints) * aModel->nbFrames > 4u * 1024u * 1024u ||
+        (aModel->nbFrames && !aModel->keyFrames))
+    { file->setstate(ios::failbit); USE_SGL = previousSgl; return; }
+    for (unsigned int frame = 0; frame < aModel->nbFrames; ++frame)
+        if (!aModel->keyFrames[frame].cVert)
+        { file->setstate(ios::failbit); USE_SGL = previousSgl; return; }
+    for (unsigned int texture = 0; texture < aModel->nbTextures; ++texture)
+    {
+        const texture_t & image = aModel->texture[texture];
+        const uint64_t pixels = uint64_t(image.width) * image.height;
+        if (!image.pixel || !pixels || image.width > 65535 || image.height > 65535 || pixels > 16u * 1024u * 1024u ||
+            (image.colorDepth != COL_16 && image.colorDepth != COL_32K) || (image.colorDepth == COL_16 && pixels % 2))
+        { file->setstate(ios::failbit); USE_SGL = previousSgl; return; }
+    }
+    animated_model_t packed = *aModel;
+    model_lod_data_t packedLods;
+    std::vector<model_t> meshes;
+    std::vector<std::vector<vertex_t> > points, frames;
+    std::vector<std::vector<polygon_t> > polygons;
+    std::vector<key_frame_t> frameDescriptors;
+    if (aModel->lodData && !aModel->lodData->levels.empty())
+    {
+        packedLods = *aModel->lodData;
+        meshes.assign(aModel->model, aModel->model + aModel->nbModels);
+        points.resize(aModel->nbModels);
+        polygons.resize(aModel->nbModels);
+        frames.resize(aModel->nbFrames);
+        frameDescriptors.resize(aModel->nbFrames);
+        unsigned int total = 0;
+        for (const model_t & mesh : meshes) total += mesh.nbPoint;
+        for (unsigned int frame = 0; frame < aModel->nbFrames; ++frame)
+        {
+            frames[frame].resize(total);
+            frameDescriptors[frame].cVert = frames[frame].data();
+        }
+        unsigned int offset = 0;
+        for (unsigned int mesh = 0; mesh < meshes.size(); ++mesh)
+        {
+            if (meshes[mesh].nbPoint > 256) { file->setstate(ios::failbit); USE_SGL = previousSgl; return; }
+            std::vector<unsigned int> order, remap(meshes[mesh].nbPoint, 0xFFFFFFFFu);
+            for (auto level = packedLods.levels.rbegin(); level != packedLods.levels.rend(); ++level)
+            {
+                if (level->meshes.size() != meshes.size()) { file->setstate(ios::failbit); USE_SGL = previousSgl; return; }
+                for (const polygon_t & face : level->meshes[mesh].faces)
+                    for (unsigned int corner = 0; corner < 4; ++corner)
+                    {
+                        const unsigned int point = face.vertIdx[corner];
+                        if (point >= remap.size()) { file->setstate(ios::failbit); USE_SGL = previousSgl; return; }
+                        if (remap[point] == 0xFFFFFFFFu) { remap[point] = order.size(); order.push_back(point); }
+                    }
+                level->meshes[mesh].pointCount = order.size();
+            }
+            for (unsigned int point = 0; point < remap.size(); ++point)
+                if (remap[point] == 0xFFFFFFFFu) { remap[point] = order.size(); order.push_back(point); }
+            points[mesh].resize(order.size());
+            for (unsigned int point = 0; point < order.size(); ++point)
+            {
+                points[mesh][point] = meshes[mesh].pntbl[order[point]];
+                for (unsigned int frame = 0; frame < aModel->nbFrames; ++frame)
+                    frames[frame][offset + point] = aModel->keyFrames[frame].cVert[offset + order[point]];
+            }
+            if (meshes[mesh].nbPolygon)
+                polygons[mesh].assign(meshes[mesh].pltbl, meshes[mesh].pltbl + meshes[mesh].nbPolygon);
+            for (polygon_t & face : polygons[mesh])
+                for (unsigned int corner = 0; corner < 4; ++corner) face.vertIdx[corner] = remap[face.vertIdx[corner]];
+            for (lod_level_t & level : packedLods.levels)
+                for (polygon_t & face : level.meshes[mesh].faces)
+                    for (unsigned int corner = 0; corner < 4; ++corner) face.vertIdx[corner] = remap[face.vertIdx[corner]];
+            meshes[mesh].pntbl = points[mesh].data();
+            meshes[mesh].pltbl = polygons[mesh].data();
+            offset += meshes[mesh].nbPoint;
+        }
+        packed.model = meshes.data();
+        packed.keyFrames = frameDescriptors.data();
+        packed.lodData = &packedLods;
+        aModel = &packed;
+    }
+    const std::streampos containerStart = file->tellp();
+    file->write(USE_SGL == 1 ? "ZTP_S01\0" : "ZTP_Z01\0", 8);
+    writeUint32(file, 32);
+    writeUint32(file, 0);
+    writeUint32(file, 0);
+    writeUint32(file, 0);
+    writeUint16(file, 1);
+    writeUint16(file, aModel->nbModels);
+    writeUint32(file, 0);
     WRITE_MDATA(file, aModel);
     WRITE_TEXTURES(file, aModel, !preserveLoadedZTP);
     if (USE_SGL==1)
         WRITE_SGL_PDATA(file, aModel);
     else {
         WRITE_ZPDATA(file, aModel, preserveLoadedZTP);
+        finishModernZTP(file, containerStart, aModel);
         USE_SGL = previousSgl;
         return;
     }
@@ -562,15 +724,16 @@ void write_model_binary(ofstream * file, animated_model_t * aModel, bool preserv
         {
             aModel->model[ii].pntbl = &aModel->keyFrames[i].cVert[v_count];
             v_count += aModel->model[ii].nbPoint;
-            recalculateNormals(&aModel->model[ii]);
+            if (!preserveLoadedZTP) recalculateNormals(&aModel->model[ii]);
         }
 
         //compareAnimationData(model, &animModel, i);
-        writeAnim(file, aModel, i);
+        writeAnim(file, aModel, i, preserveLoadedZTP);
         for (unsigned int i=0; i<aModel->nbModels; i++) {
             aModel->model[i].pntbl = v[i];
         }
     }
+    finishModernZTP(file, containerStart, aModel);
     USE_SGL = previousSgl;
 }
 

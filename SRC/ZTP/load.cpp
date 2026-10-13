@@ -6,6 +6,7 @@
 #include <array>
 #include <iterator>
 #include <new>
+#include <cstring>
 #include "mtl.h"
 extern int USE_SGL;
 
@@ -14,7 +15,7 @@ namespace
 class ZTPReader
 {
 public:
-    explicit ZTPReader(const std::vector<uint8_t> &data) : data(data), offset(0) {}
+    explicit ZTPReader(const std::vector<uint8_t> &data, size_t position = 0) : data(data), offset(position) {}
 
     bool readU8(uint8_t &value)
     {
@@ -46,6 +47,14 @@ public:
             if (!readU8(bytes[index])) return false;
         value = (static_cast<uint32_t>(bytes[0]) << 24) | (static_cast<uint32_t>(bytes[1]) << 16) |
                 (static_cast<uint32_t>(bytes[2]) << 8) | bytes[3];
+        return true;
+    }
+
+    bool readS16(int16_t &value)
+    {
+        uint16_t raw;
+        if (!readU16(raw)) return false;
+        value = raw < 0x8000 ? static_cast<int16_t>(raw) : static_cast<int16_t>(int32_t(raw) - 0x10000);
         return true;
     }
 
@@ -85,6 +94,7 @@ struct ZTPMeshRange
 void destroyLoadedZTP(animated_model_t *model)
 {
     if (!model) return;
+    delete model->lodData;
     if (model->model)
         for (unsigned int mesh = 0; mesh < model->nbModels; ++mesh)
         {
@@ -115,23 +125,134 @@ bool readFixedVector(ZTPReader &reader, float *destination, unsigned int count)
 }
 }
 
-animated_model_t * loadZTPFile(const string &filePath)
+static bool readLodDirectory(animated_model_t * model, const std::vector<uint8_t> & bytes,
+                             uint32_t lodOffset, unsigned int levels)
+{
+    const size_t directoryBytes = size_t(levels) * model->nbModels * 16;
+    if (bytes.size() < directoryBytes) return false;
+    ZTPReader directory(bytes);
+    if (!model->lodData) model->lodData = new model_lod_data_t;
+    model->lodData->levels.resize(levels - 1);
+    size_t nextFace = directoryBytes;
+    std::vector<unsigned int> previousPoints(model->nbModels);
+    for (unsigned int mesh = 0; mesh < model->nbModels; ++mesh) previousPoints[mesh] = model->model[mesh].nbPoint;
+    unsigned int previousReduction = 0;
+    for (unsigned int level = 0; level < levels; ++level)
+    {
+        unsigned int currentReduction = 0;
+        if (level) model->lodData->levels[level - 1].meshes.resize(model->nbModels);
+        for (unsigned int mesh = 0; mesh < model->nbModels; ++mesh)
+        {
+            uint16_t points, flags, reduction, reserved;
+            uint32_t faces, faceOffset;
+            if (!directory.readU16(points) || !directory.readU16(flags) || !directory.readU32(faces) ||
+                !directory.readU32(faceOffset) || !directory.readU16(reduction) || !directory.readU16(reserved) || reserved)
+                return false;
+            if (!level)
+            {
+                if (points != previousPoints[mesh] || flags || faces != model->model[mesh].nbPolygon || faceOffset || reduction)
+                    return false;
+                continue;
+            }
+            if (points > previousPoints[mesh] || points > 256 || flags != 1 || faces > maxPolygons ||
+                !reduction || reduction > 99 || reduction <= previousReduction ||
+                (mesh && reduction != currentReduction) ||
+                (faces ? faceOffset != lodOffset + nextFace : faceOffset != 0) ||
+                uint64_t(nextFace) + uint64_t(faces) * 12 > bytes.size()) return false;
+            currentReduction = reduction;
+            previousPoints[mesh] = points;
+            lod_mesh_t & lod = model->lodData->levels[level - 1].meshes[mesh];
+            lod.pointCount = points;
+            lod.faces.resize(faces);
+            ZTPReader faceReader(bytes, nextFace);
+            for (polygon_t & face : lod.faces)
+            {
+                for (unsigned int corner = 0; corner < 4; ++corner)
+                {
+                    uint8_t point;
+                    if (!faceReader.readU8(point) || point >= points) return false;
+                    face.vertIdx[corner] = point;
+                }
+                uint16_t texture, command, attributes, color;
+                if (!faceReader.readU16(texture) || !faceReader.readU16(command) ||
+                    !faceReader.readU16(attributes) || !faceReader.readU16(color) || texture != 0xFFFF ||
+                    (command & 15) != FUNC_Polygon || (attributes & 0x38) != 0x28) return false;
+                face.texture = -1;
+                face.SGL_ATTR.dir = command & 0x7FF;
+                face.SGL_ATTR.sorting = (command >> 12) & 3;
+                face.SGL_ATTR.flag = (command >> 11) & 1;
+                face.SGL_ATTR.atrb = attributes;
+                face.SGL_ATTR.colno = color;
+                face.color.rgb = color;
+                face.color.r = (color & 31) * 8;
+                face.color.g = ((color >> 5) & 31) * 8;
+                face.color.b = ((color >> 10) & 31) * 8;
+                face.color.a = 255;
+            }
+            nextFace += size_t(faces) * 12;
+        }
+        if (level)
+        {
+            model->lodData->levels[level - 1].reduction = currentReduction;
+            previousReduction = currentReduction;
+        }
+    }
+    return nextFace == bytes.size();
+}
+
+static animated_model_t * readZTPFile(const string &filePath, bool sgl)
 {
     ifstream file(filePath.c_str(), ios::binary);
     if (!file.is_open()) return NULL;
     std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     if (file.bad() || bytes.empty()) return NULL;
 
+    std::vector<uint8_t> lodBlock;
+    uint32_t lodOffset = 0;
+    uint16_t levels = 1, containerMeshes = 0;
+    const bool modern = bytes.size() >= 4 && std::memcmp(bytes.data(), "ZTP_", 4) == 0;
+    if (modern)
+    {
+        if (bytes.size() < 32) return NULL;
+        if (std::memcmp(bytes.data(), "ZTP_Z01\0", 8) == 0) sgl = false;
+        else if (std::memcmp(bytes.data(), "ZTP_S01\0", 8) == 0) sgl = true;
+        else return NULL;
+        ZTPReader container(bytes);
+        uint8_t signature[8];
+        uint32_t modelOffset, modelBytes, lodBytes, flags;
+        if (!container.readBytes(signature, 8) || !container.readU32(modelOffset) ||
+            !container.readU32(modelBytes) || !container.readU32(lodOffset) ||
+            !container.readU32(lodBytes) || !container.readU16(levels) ||
+            !container.readU16(containerMeshes) || !container.readU32(flags) || modelOffset != 32 ||
+            modelBytes > bytes.size() - 32 || !levels || levels > 64 || !containerMeshes || containerMeshes > 256 ||
+            (levels == 1 ? (flags || lodOffset || lodBytes || modelBytes != bytes.size() - 32) :
+             (flags != 1 || lodOffset != ((32u + modelBytes + 3u) & ~3u) ||
+              uint64_t(lodOffset) + lodBytes != bytes.size())))
+            return NULL;
+        if (levels > 1)
+        {
+            if (lodOffset > bytes.size()) return NULL;
+            for (size_t padding = 32 + modelBytes; padding < lodOffset; ++padding)
+                if (bytes[padding]) return NULL;
+            lodBlock.assign(bytes.begin() + lodOffset, bytes.end());
+        }
+        bytes.resize(32 + modelBytes);
+        bytes.erase(bytes.begin(), bytes.begin() + 32);
+    }
+
     ZTPReader reader(bytes);
-    uint16_t modelCount, textureCount, pointCount, polygonCount, frameCount, frameRate;
+    uint16_t modelCount, textureCount, pointCount = 0, polygonCount = 0, frameCount, frameRate;
     uint32_t textureBlockSize, reserved;
-    if (!reader.readU16(modelCount) || !reader.readU16(textureCount) || !reader.readU32(textureBlockSize) ||
-        !reader.readU16(pointCount) || !reader.readU16(polygonCount)) return NULL;
+    if (!reader.readU16(modelCount) || !reader.readU16(textureCount) || !reader.readU32(textureBlockSize)) return NULL;
+    if (sgl) { if (!reader.readU32(reserved)) return NULL; }
+    else if (!reader.readU16(pointCount) || !reader.readU16(polygonCount)) return NULL;
     if (modelCount == 0 || modelCount > 256 || textureCount > 1280 || polygonCount > maxPolygons) return NULL;
+    if (modern && containerMeshes != modelCount) return NULL;
 
     animated_model_t *model = new (std::nothrow) animated_model_t();
     if (!model) return NULL;
     model->nbModels = modelCount;
+    model->sourceSgl = sgl ? 1 : 0;
     model->nbTextures = textureCount;
     model->model = new (std::nothrow) model_t[modelCount]();
     model->texture = new (std::nothrow) texture_t[textureCount]();
@@ -142,13 +263,14 @@ animated_model_t * loadZTPFile(const string &filePath)
     }
 
     if (!readFixedVector(reader, model->BoxMin, XYZ) || !readFixedVector(reader, model->BoxMax, XYZ) ||
-        !readFixedVector(reader, model->scale, XYZ) || !reader.readU16(frameCount) ||
+        (!sgl && !readFixedVector(reader, model->scale, XYZ)) || !reader.readU16(frameCount) ||
         !reader.readU16(frameRate) || !reader.readU32(reserved))
     {
         destroyLoadedZTP(model);
         return NULL;
     }
-    for (unsigned int index = 0; index < 9; ++index)
+    for (unsigned int axis = 0; sgl && axis < XYZ; ++axis) model->scale[axis] = 1.0f;
+    for (unsigned int index = 0; !sgl && index < 9; ++index)
         if (!reader.readU32(reserved))
         {
             destroyLoadedZTP(model);
@@ -235,6 +357,104 @@ animated_model_t * loadZTPFile(const string &filePath)
     {
         destroyLoadedZTP(model);
         return NULL;
+    }
+
+    if (sgl)
+    {
+        const auto fail = [&]() -> animated_model_t * { destroyLoadedZTP(model); return NULL; };
+        uint32_t totalPoints = 0, totalFaces = 0;
+        for (unsigned int mesh = 0; mesh < modelCount; ++mesh)
+        {
+            model_t & part = model->model[mesh];
+            uint32_t points, faces;
+            if (!reader.readU32(reserved) || !reader.readU32(points) || !reader.readU32(reserved) ||
+                !reader.readU32(faces) || !reader.readU32(reserved) || !reader.readU32(reserved) ||
+                points > 65535 || faces > maxPolygons || uint64_t(totalPoints) + points > 65535 ||
+                uint64_t(totalFaces) + faces > maxPolygons ||
+                uint64_t(points) * 24 + uint64_t(faces) * 32 > reader.remaining()) return fail();
+            part.nbPoint = points;
+            part.nbPolygon = faces;
+            part.pntbl = new vertex_t[points]();
+            part.pltbl = new polygon_t[faces]();
+            for (unsigned int axis = 0; axis < XYZ; ++axis)
+            {
+                part.BoxMin[axis] = std::numeric_limits<float>::max();
+                part.BoxMax[axis] = -std::numeric_limits<float>::max();
+            }
+            for (unsigned int point = 0; point < points; ++point)
+            {
+                if (!readFixedVector(reader, part.pntbl[point].point, XYZ)) return fail();
+                for (unsigned int axis = 0; axis < XYZ; ++axis)
+                {
+                    part.BoxMin[axis] = MIN(part.BoxMin[axis], part.pntbl[point].point[axis]);
+                    part.BoxMax[axis] = MAX(part.BoxMax[axis], part.pntbl[point].point[axis]);
+                }
+            }
+            for (unsigned int face = 0; face < faces; ++face)
+            {
+                polygon_t & polygon = part.pltbl[face];
+                if (!readFixedVector(reader, polygon.normal, XYZ)) return fail();
+                for (unsigned int corner = 0; corner < 4; ++corner)
+                {
+                    uint16_t point;
+                    if (!reader.readU16(point) || point >= points) return fail();
+                    polygon.vertIdx[corner] = point;
+                }
+            }
+            for (unsigned int face = 0; face < faces; ++face)
+            {
+                polygon_t & polygon = part.pltbl[face];
+                uint8_t flag, sorting;
+                if (!reader.readU8(flag) || !reader.readU8(sorting) || !reader.readU16(polygon.SGL_ATTR.texno) ||
+                    !reader.readU16(polygon.SGL_ATTR.atrb) || !reader.readU16(polygon.SGL_ATTR.colno) ||
+                    !reader.readU16(polygon.SGL_ATTR.gstb) || !reader.readU16(polygon.SGL_ATTR.dir) ||
+                    polygon.SGL_ATTR.texno >= textureCount) return fail();
+                polygon.SGL_ATTR.flag = flag;
+                polygon.SGL_ATTR.sorting = sorting;
+                polygon.texture = polygon.SGL_ATTR.texno;
+            }
+            for (unsigned int point = 0; point < points; ++point)
+                if (!readFixedVector(reader, part.pntbl[point].normal, XYZ)) return fail();
+            totalPoints += points;
+            totalFaces += faces;
+        }
+        if (!totalPoints || uint64_t(totalPoints) * frameCount > 4u * 1024u * 1024u) return fail();
+        const uint64_t frameBytes = 8 + uint64_t(totalPoints) * 6 + (totalPoints % 2) * 2 + ((totalFaces + 3u) & ~3u);
+        if (frameBytes * frameCount != reader.remaining()) return fail();
+        model->keyFrames = new key_frame_t[frameCount]();
+        model->lodData = new model_lod_data_t;
+        model->lodData->sglFrameNormals.resize(frameCount);
+        for (unsigned int frame = 0; frame < frameCount; ++frame)
+        {
+            if (!reader.readU32(reserved) || !reader.readU32(reserved)) return fail();
+            model->keyFrames[frame].cVert = new vertex_t[totalPoints]();
+            unsigned int offset = 0;
+            for (unsigned int mesh = 0; mesh < modelCount; ++mesh)
+                for (unsigned int point = 0; point < model->model[mesh].nbPoint; ++point, ++offset)
+                {
+                    vertex_t & vertex = model->keyFrames[frame].cVert[offset];
+                    for (unsigned int axis = 0; axis < XYZ; ++axis)
+                    {
+                        int16_t coordinate;
+                        if (!reader.readS16(coordinate)) return fail();
+                        vertex.point[axis] = coordinate / 16.0f;
+                        vertex.normal[axis] = model->model[mesh].pntbl[point].normal[axis];
+                    }
+                }
+            if (totalPoints % 2) { uint16_t padding; if (!reader.readU16(padding)) return fail(); }
+            auto & normals = model->lodData->sglFrameNormals[frame];
+            normals.resize(totalFaces);
+            if (!reader.readBytes(normals.data(), normals.size())) return fail();
+            for (unsigned int padding = totalFaces; padding % 4; ++padding)
+            {
+                uint8_t value;
+                if (!reader.readU8(value)) return fail();
+            }
+        }
+        if (levels > 1 && !readLodDirectory(model, lodBlock, lodOffset, levels)) return fail();
+        extern void calcLight(animated_model_t *);
+        calcLight(model);
+        return model;
     }
 
     std::vector<ZTPMeshRange> ranges(modelCount);
@@ -331,6 +551,7 @@ animated_model_t * loadZTPFile(const string &filePath)
         }
     }
 
+    bool legacyRawCommands = !modern;
     for (unsigned int mesh = 0; mesh < modelCount; ++mesh)
     {
         model_t &submodel = model->model[mesh];
@@ -361,6 +582,7 @@ animated_model_t * loadZTPFile(const string &filePath)
                 return NULL;
             }
             polygon.texture = textureId;
+            if (command & 0xFFC0) legacyRawCommands = false;
             polygon.SGL_ATTR.dir = command & 0x0FFF;
             polygon.SGL_ATTR.sorting = (command >> 12) & 3;
             polygon.SGL_ATTR.flag = (command >> 11) & 1;
@@ -370,6 +592,10 @@ animated_model_t * loadZTPFile(const string &filePath)
             model->texture[textureId].SGL_ATTR.colno = colorNumber;
         }
     }
+    if (legacyRawCommands)
+        for (unsigned int mesh = 0; mesh < modelCount; ++mesh)
+            for (unsigned int face = 0; face < model->model[mesh].nbPolygon; ++face)
+                model->model[mesh].pltbl[face].SGL_ATTR.sorting = SORT_CEN;
 
     for (unsigned int mesh = 0; mesh < modelCount; ++mesh)
     {
@@ -391,9 +617,21 @@ animated_model_t * loadZTPFile(const string &filePath)
                 std::copy(base.color, base.color + XYZ, animated.color);
             }
 
+    if (reader.remaining() || (levels > 1 && !readLodDirectory(model, lodBlock, lodOffset, levels)))
+    {
+        destroyLoadedZTP(model);
+        return NULL;
+    }
     extern void calcLight(animated_model_t *);
     calcLight(model);
     return model;
+}
+
+animated_model_t * loadZTPFile(const string & filePath)
+{
+    animated_model_t * model = readZTPFile(filePath, false);
+    if (model) return model;
+    return readZTPFile(filePath, true);
 }
 int generate_texture_list(string inString, animated_model_t * model)
 {
@@ -1203,6 +1441,7 @@ animated_model_t * loadingConfigured(unsigned int frameCount, int useSgl, float 
     animated_model_t * newModel = new animated_model_t;
     ZeroMemory(newModel, sizeof(animated_model_t));
     newModel->nbFrames = frameCount;
+    newModel->sourceSgl = useSgl == 1 ? 1 : 0;
     newModel->framerate = 0;
     newModel->nbModels = 0;
     newModel->model = new model_t[256];

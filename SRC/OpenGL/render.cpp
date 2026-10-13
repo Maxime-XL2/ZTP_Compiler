@@ -524,13 +524,6 @@ float drawText(char * ptr, float x, float y){
     return posY;
 }
 
-string sortInfoArray[]={
-    "SORT_BFR" ,			/* 直前に表示したポリゴンの位置を使う */
-	"SORT_MIN" ,			/* ４点の内?A一番手前の点を使う */
-	"SORT_MAX" ,			/* ４点の内一番遠い点を使う */
-	"SORT_CEN"
-};
-
 string cmdCtrlInfoArray[]={
     "FUNC_Normal",              //0
     "FUNC_Scaled_sprite",       //1
@@ -637,7 +630,7 @@ void renderText(animated_model_t * model){
         ((opt&UsePalette)?cmdtSpecialOptions[4]:cmdtSpecialOptions[0]) +
         ((opt&UseDepth)?cmdtSpecialOptions[3]:cmdtSpecialOptions[0]) +
         ((opt&UseNearClip)?cmdtSpecialOptions[5]:cmdtSpecialOptions[0]) + "\n" +
-        sortInfoArray[pol->SGL_ATTR.sorting&3];
+        sortingModeName(pol->SGL_ATTR.sorting);
         drawText(&polSort[0], polInfoPos[0], polInfoPos[1]+7 );
 
         drawText("R=ROTATE POLYGON\nM=TOGGLE MESH TRANSPARENCY, H=TOGGLE GOURAUD\nF=FLIP TEXTURE READ DIRECTION\nC=TOGGLE BACKFACE CULLING\nN=CHANGE SORTING RULE", 0, infoPosY+4);

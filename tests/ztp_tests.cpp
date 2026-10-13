@@ -4,6 +4,11 @@
 #include <vector>
 #include <iostream>
 #include <iterator>
+#include <cstring>
+#include <cstddef>
+
+static_assert(sizeof(ATTR) == 12, "ATTR serialized layout must remain 12 bytes");
+static_assert(offsetof(ATTR, sorting) == 1, "Sorting must remain the second attribute byte");
 
 animated_model_t *loadZTPFile(const string &filePath);
 void write_model_binary(ofstream *, animated_model_t *, bool);
@@ -128,6 +133,7 @@ static vector<uint8_t> makeFixture(uint16_t depth, unsigned int meshCount = 1, u
 static void destroyModel(animated_model_t *model)
 {
     if (!model) return;
+    delete model->lodData;
     for (unsigned int mesh = 0; mesh < model->nbModels; ++mesh)
     {
         delete [] model->model[mesh].pntbl;
@@ -165,7 +171,7 @@ static void checkRoundTrip(animated_model_t * original, uint16_t depth, const st
     assert(output.good());
     ifstream bytes(path.c_str(), ios::binary | ios::ate);
     const size_t outputSize = static_cast<size_t>(bytes.tellg());
-    assert(outputSize == (expectedSize ? expectedSize : makeFixture(depth, original->nbModels, original->nbFrames).size()));
+    assert(outputSize == 32 + (expectedSize ? expectedSize : makeFixture(depth, original->nbModels, original->nbFrames).size()));
     if (expectedSize) std::cout << "Real model round-trip: " << expectedSize << " -> " << outputSize << " bytes\n";
     bytes.close();
     animated_model_t * reloaded = loadZTPFile(path);
@@ -246,6 +252,204 @@ static void checkRoundTrip(animated_model_t * original, uint16_t depth, const st
     std::remove(path.c_str());
 }
 
+static vector<uint8_t> readFileBytes(const string & path)
+{
+    ifstream file(path.c_str(), ios::binary);
+    return vector<uint8_t>((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+}
+
+static void checkLegacyRawSorting()
+{
+    vector<uint8_t> bytes = makeFixture(COL_16);
+    const size_t polygonOffset = 92 + 46 + 12 + 4 * 3 * 2;
+    bytes[polygonOffset + 6] = 0;
+    bytes[polygonOffset + 7] = FUNC_Texture;
+    ofstream old("raw_commands.ztp", ios::binary);
+    old.write(reinterpret_cast<const char *>(bytes.data()), bytes.size()); old.close();
+    animated_model_t * loaded = loadZTPFile("raw_commands.ztp");
+    assert(loaded && loaded->model[0].pltbl[0].SGL_ATTR.sorting == SORT_CEN);
+    assert(saveZTPFile("raw_commands_modern.ztp", loaded));
+    animated_model_t * modern = loadZTPFile("raw_commands_modern.ztp");
+    assert(modern && modern->model[0].pltbl[0].SGL_ATTR.sorting == SORT_CEN);
+    destroyModel(modern);
+    loaded->model[0].pltbl[0].SGL_ATTR.sorting = SORT_BFR;
+    assert(saveZTPFile("raw_commands_modern.ztp", loaded));
+    modern = loadZTPFile("raw_commands_modern.ztp");
+    assert(modern && modern->model[0].pltbl[0].SGL_ATTR.sorting == SORT_BFR);
+    destroyModel(modern);
+    destroyModel(loaded);
+    std::remove("raw_commands.ztp"); std::remove("raw_commands_modern.ztp");
+}
+
+static void checkSortingModes()
+{
+    ATTR attribute = {};
+    polygon_t polygon = {};
+    texture_t texture = {};
+    assert(attribute.sorting == SORT_CEN);
+    assert(polygon.SGL_ATTR.sorting == SORT_CEN);
+    assert(texture.SGL_ATTR.sorting == SORT_CEN);
+    const unsigned int modes[] = {SORT_BFR, SORT_MIN, SORT_MAX, SORT_CEN};
+    const char * names[] = {"SORT_BFR", "SORT_MIN", "SORT_MAX", "SORT_CEN"};
+    for (unsigned int mode = 0; mode < 4; ++mode)
+        assert(std::strcmp(sortingModeName(modes[mode] | UseNearClip | UseLight), names[mode]) == 0);
+    for (unsigned int sgl = 0; sgl < 2; ++sgl)
+    {
+        animated_model_t * model = loadFixture(COL_16, "sorting_legacy.ztp");
+        assert(model);
+        model->sourceSgl = sgl;
+        for (unsigned int mode : modes)
+        {
+            model->model[0].pltbl[0].SGL_ATTR.sorting = mode | (sgl ? UseNearClip | UseLight : 0);
+            assert(saveZTPFile("sorting_modern.ztp", model));
+            animated_model_t * loaded = loadZTPFile("sorting_modern.ztp");
+            assert(loaded && (loaded->model[0].pltbl[0].SGL_ATTR.sorting & 3) == mode);
+            if (sgl) assert(loaded->model[0].pltbl[0].SGL_ATTR.sorting == (mode | UseNearClip | UseLight));
+            destroyModel(loaded);
+            vector<uint8_t> bytes = readFileBytes("sorting_modern.ztp");
+            ofstream old("sorting_legacy.ztp", ios::binary | ios::trunc);
+            old.write(reinterpret_cast<const char *>(bytes.data() + 32), bytes.size() - 32); old.close();
+            loaded = loadZTPFile("sorting_legacy.ztp");
+            assert(loaded && (loaded->model[0].pltbl[0].SGL_ATTR.sorting & 3) == mode);
+            destroyModel(loaded);
+        }
+        destroyModel(model);
+    }
+    std::remove("sorting_legacy.ztp"); std::remove("sorting_modern.ztp");
+}
+
+static void checkLodFile(bool sgl)
+{
+    const string sourcePath = "lod_source.ztp", path = "lod_modern.ztp", secondPath = "lod_resaved.ztp";
+    animated_model_t * model = loadFixture(COL_16, sourcePath, 2, 2);
+    assert(model);
+    for (unsigned int mesh = 0; mesh < 2; ++mesh)
+    {
+        vertex_t * expanded = new vertex_t[4]();
+        std::copy(model->model[mesh].pntbl, model->model[mesh].pntbl + 3, expanded);
+        expanded[3].point[Z] = 15;
+        expanded[3].normal[Z] = 1;
+        delete [] model->model[mesh].pntbl;
+        model->model[mesh].pntbl = expanded;
+        model->model[mesh].nbPoint = 4;
+        model->model[mesh].pltbl[0].vertIdx[3] = 3;
+    }
+    for (unsigned int frame = 0; frame < 2; ++frame)
+    {
+        vertex_t * expanded = new vertex_t[8]();
+        for (unsigned int mesh = 0; mesh < 2; ++mesh)
+        {
+            std::copy(model->keyFrames[frame].cVert + mesh * 3, model->keyFrames[frame].cVert + mesh * 3 + 3,
+                expanded + mesh * 4);
+            expanded[mesh * 4 + 3].point[Z] = 30 + frame;
+            expanded[mesh * 4 + 3].normal[Z] = 1;
+        }
+        delete [] model->keyFrames[frame].cVert;
+        model->keyFrames[frame].cVert = expanded;
+    }
+    model->sourceSgl = sgl ? 1 : 0;
+    model->lodData = new model_lod_data_t;
+    model->lodData->levels.resize(2);
+    for (unsigned int level = 0; level < 2; ++level)
+    {
+        lod_level_t & lod = model->lodData->levels[level];
+        lod.reduction = level ? 90 : 50;
+        lod.meshes.resize(2);
+        for (unsigned int mesh = 0; mesh < 2; ++mesh)
+        {
+            polygon_t face = model->model[mesh].pltbl[0];
+            if (level)
+            {
+                face.vertIdx[0] = 1; face.vertIdx[1] = 2;
+                face.vertIdx[2] = 3; face.vertIdx[3] = 3;
+            }
+            face.color.rgb = 0x801F;
+            lod.meshes[mesh].faces.push_back(face);
+        }
+    }
+    assert(saveZTPFile(path, model));
+    vector<uint8_t> bytes = readFileBytes(path);
+    assert(std::memcmp(bytes.data(), sgl ? "ZTP_S01\0" : "ZTP_Z01\0", 8) == 0);
+    animated_model_t * loaded = loadZTPFile(path);
+    assert(loaded && loaded->sourceSgl == model->sourceSgl);
+    assert(loaded->lodData && loaded->lodData->levels.size() == 2);
+    const unsigned int order[4] = {1, 2, 3, 0};
+    for (unsigned int mesh = 0; mesh < 2; ++mesh)
+    {
+        assert(loaded->lodData->levels[0].meshes[mesh].pointCount == 4);
+        assert(loaded->lodData->levels[1].meshes[mesh].pointCount == 3);
+        for (unsigned int point = 0; point < 4; ++point)
+            for (unsigned int axis = 0; axis < XYZ; ++axis)
+            {
+                assert(loaded->model[mesh].pntbl[point].point[axis] == model->model[mesh].pntbl[order[point]].point[axis]);
+                for (unsigned int frame = 0; frame < 2; ++frame)
+                    assert(loaded->keyFrames[frame].cVert[mesh * 4 + point].point[axis] ==
+                        model->keyFrames[frame].cVert[mesh * 4 + order[point]].point[axis]);
+            }
+        assert(loaded->model[mesh].pltbl[0].vertIdx[0] == 3);
+        for (unsigned int level = 0; level < 2; ++level)
+            for (const polygon_t & face : loaded->lodData->levels[level].meshes[mesh].faces)
+                for (unsigned int corner = 0; corner < 4; ++corner)
+                    assert(face.vertIdx[corner] < loaded->lodData->levels[level].meshes[mesh].pointCount);
+        assert(model->model[mesh].pltbl[0].vertIdx[0] == 0);
+    }
+    assert(saveZTPFile(secondPath, loaded));
+    assert(bytes == readFileBytes(secondPath));
+    vector<uint8_t> invalid = bytes;
+    invalid[8] = 1;
+    ofstream bad("invalid_modern.ztp", ios::binary);
+    bad.write(reinterpret_cast<const char *>(invalid.data()), invalid.size()); bad.close();
+    assert(!loadZTPFile("invalid_modern.ztp"));
+    for (unsigned int variant = 0; variant < 4; ++variant)
+    {
+        invalid = bytes;
+        if (variant == 0) invalid[6] = '2';
+        else if (variant == 1) { invalid[24] = 0; invalid[25] = 0; }
+        else if (variant == 2) invalid.pop_back();
+        else
+        {
+            const uint32_t directory = (uint32_t(bytes[16]) << 24) | (uint32_t(bytes[17]) << 16) |
+                (uint32_t(bytes[18]) << 8) | bytes[19];
+            invalid[directory + 64] = 0;
+            invalid[directory + 65] = 2;
+        }
+        ofstream rejected("invalid_modern.ztp", ios::binary);
+        rejected.write(reinterpret_cast<const char *>(invalid.data()), invalid.size()); rejected.close();
+        assert(!loadZTPFile("invalid_modern.ztp"));
+    }
+    assert(deleteAutomaticLod(loaded, 1));
+    assert(saveZTPFile(secondPath, loaded));
+    animated_model_t * remaining = loadZTPFile(secondPath);
+    assert(remaining && automaticLodLevelCount(remaining) == 1);
+    assert(remaining->lodData->levels[0].reduction == 90);
+    assert(!deleteAutomaticLod(remaining, 0));
+    assert(deleteAutomaticLod(remaining, 1));
+    assert(saveZTPFile(secondPath, remaining));
+    animated_model_t * baseOnly = loadZTPFile(secondPath);
+    assert(baseOnly && automaticLodLevelCount(baseOnly) == 0 && baseOnly->nbModels == 2);
+    destroyModel(baseOnly);
+    destroyModel(remaining);
+    if (sgl)
+    {
+        loaded->lodData->levels.clear();
+        assert(saveZTPFile(secondPath, loaded));
+        vector<uint8_t> single = readFileBytes(secondPath);
+        ofstream old("legacy_sgl.ztp", ios::binary);
+        old.write(reinterpret_cast<const char *>(single.data() + 32), single.size() - 32); old.close();
+        animated_model_t * legacy = loadZTPFile("legacy_sgl.ztp");
+        assert(legacy && legacy->sourceSgl == 1 && legacy->nbFrames == 2);
+        assert(saveZTPFile(secondPath, legacy));
+        single = readFileBytes(secondPath);
+        assert(std::memcmp(single.data(), "ZTP_S01\0", 8) == 0);
+        destroyModel(legacy);
+        std::remove("legacy_sgl.ztp");
+    }
+    destroyModel(loaded);
+    destroyModel(model);
+    std::remove(sourcePath.c_str()); std::remove(path.c_str()); std::remove(secondPath.c_str());
+    std::remove("invalid_modern.ztp");
+}
+
 int main(int argumentCount, char **arguments)
 {
     animated_model_t * exported = NULL;
@@ -254,6 +458,12 @@ int main(int argumentCount, char **arguments)
     {
         exported = loadZTPFile(arguments[1]);
         assert(exported);
+        unsigned int sortingCounts[4] = {};
+        for (unsigned int mesh = 0; mesh < exported->nbModels; ++mesh)
+            for (unsigned int face = 0; face < exported->model[mesh].nbPolygon; ++face)
+                ++sortingCounts[exported->model[mesh].pltbl[face].SGL_ATTR.sorting & 3];
+        std::cout << "Real model sorting: BFR=" << sortingCounts[SORT_BFR] << ", MIN=" << sortingCounts[SORT_MIN]
+            << ", MAX=" << sortingCounts[SORT_MAX] << ", CEN=" << sortingCounts[SORT_CEN] << "\n";
         ifstream source(arguments[1], ios::binary | ios::ate);
         assert(source.good());
         originalSize = static_cast<size_t>(source.tellg());
@@ -267,9 +477,29 @@ int main(int argumentCount, char **arguments)
     assert(CreateDirectoryA(temporaryPath, NULL));
     assert(SetCurrentDirectoryA(temporaryPath));
     assert(CreateDirectoryA("OUT", NULL));
+    checkLegacyRawSorting();
+    checkSortingModes();
+    checkLodFile(false);
+    checkLodFile(true);
     if (exported)
     {
         checkRoundTrip(exported, COL_16, "real_model_TEST.ZTP", originalSize);
+        assert(generateAutomaticLod(exported, 75));
+        assert(generateAutomaticLod(exported, 90));
+        assert(automaticLodLevelCount(exported) == 2);
+        assert(generateAutomaticLod(exported, 95, 2));
+        assert(automaticLodLevelCount(exported) == 2 && exported->lodData->levels[1].reduction == 95);
+        assert(saveZTPFile("real_lods.ztp", exported));
+        animated_model_t * lodModel = loadZTPFile("real_lods.ztp");
+        assert(lodModel && automaticLodLevelCount(lodModel) == 2);
+        assert(lodModel->lodData->levels[1].reduction == 95);
+        assert(selectAutomaticLod(lodModel, 2));
+        assert(automaticLodFaceCount() <= exported->model[0].nbPolygon);
+        assert(saveZTPFile("real_lods_again.ztp", lodModel));
+        assert(readFileBytes("real_lods.ztp") == readFileBytes("real_lods_again.ztp"));
+        resetAutomaticLod();
+        destroyModel(lodModel);
+        std::remove("real_lods.ztp"); std::remove("real_lods_again.ztp");
         destroyModel(exported);
     }
 
