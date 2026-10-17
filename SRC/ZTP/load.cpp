@@ -1348,6 +1348,29 @@ for (uint32_t i=0; i<m->nbPolygon; i++){
         totVertices+=aModel->model[i].nbPoint;
     }
 
+    string animationPrefix;
+    string animationSeparator;
+    unsigned int animationDigits = 0;
+    bool baseIsFirstAnimationFrame = false;
+    if (fileIn.size() >= 7 && fileIn.compare(fileIn.size() - 7, 7, "_000001") == 0)
+    {
+        animationPrefix = fileIn.substr(0, fileIn.size() - 7);
+        animationSeparator = "_";
+        animationDigits = 6;
+        baseIsFirstAnimationFrame = true;
+    }
+    else if (fileIn.size() >= 6 && fileIn.compare(fileIn.size() - 6, 6, "000001") == 0)
+    {
+        animationPrefix = fileIn.substr(0, fileIn.size() - 6);
+        animationDigits = 6;
+        baseIsFirstAnimationFrame = true;
+    }
+    else if (fileIn.size() >= 4 && fileIn.compare(fileIn.size() - 4, 4, "0000") == 0)
+    {
+        animationPrefix = fileIn.substr(0, fileIn.size() - 4);
+        animationDigits = 4;
+        baseIsFirstAnimationFrame = true;
+    }
 
     for (uint32_t i=0; i<aModel->nbFrames; i++)
     {
@@ -1355,9 +1378,38 @@ for (uint32_t i=0; i<m->nbPolygon; i++){
         stringstream frameNumber;
         frameNumber << std::setw(6) << std::setfill('0') << i + 1;
         string postVal = frameNumber.str();
-        string animName = inFolder + fileIn + "_" + postVal + ".obj";
+        string animName;
+        if (baseIsFirstAnimationFrame)
+        {
+            if (i == 0) animName = fileInName;
+            else
+            {
+                stringstream frameNumber;
+                frameNumber << std::setw(animationDigits) << std::setfill('0')
+                            << (animationDigits == 4 ? i : i + 1);
+                animName = inFolder + animationPrefix + animationSeparator + frameNumber.str() + ".obj";
+            }
+        }
+        else
+        {
+            animName = inFolder + fileIn + "_" + postVal + ".obj";
+        }
         cout << animName << "\n\n****************\n";
         ifstream animFile(animName, ios::in | ios::ate);
+        if (!animFile.is_open() && !baseIsFirstAnimationFrame)
+        {
+            animName = inFolder + fileIn + postVal + ".obj";
+            animFile.clear();
+            animFile.open(animName, ios::in | ios::ate);
+        }
+        if (!animFile.is_open() && !baseIsFirstAnimationFrame)
+        {
+            stringstream zeroBasedFrameNumber;
+            zeroBasedFrameNumber << std::setw(4) << std::setfill('0') << i;
+            animName = inFolder + fileIn + zeroBasedFrameNumber.str() + ".obj";
+            animFile.clear();
+            animFile.open(animName, ios::in | ios::ate);
+        }
         if (!animFile.is_open()) {
             cout << "ERROR READING OBJ FILE\n";
             delete [] aModel->keyFrames[i].cVert;
