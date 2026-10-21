@@ -2,8 +2,10 @@
 #include "SRC/COMMON.H"
 #include <commdlg.h>
 #include <commctrl.h>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <sstream>
 #include <cmath>
 #include <cctype>
@@ -14,6 +16,9 @@ void EnableOpenGL(HWND hwnd, HDC*, HGLRC*);
 void DisableOpenGL(HWND, HDC, HGLRC);
 void deleteModels(animated_model_t * model);
 extern int USE_SGL;
+extern string fbxLoadError;
+extern uint32_t maxGeneratedTextureWidth;
+extern uint32_t maxGeneratedTextureHeight;
 extern string fileOutName;
 extern player_t PLAYER[4];
 extern unsigned int specialTextureId[256];
@@ -21,8 +26,13 @@ extern unsigned int asciiTextureId;
 extern unsigned int texId[1280];
 extern void setTextures(animated_model_t *);
 extern void setModelTextures(animated_model_t *, unsigned int *);
+extern void refreshModelTextures(animated_model_t *, unsigned int);
 extern void resetPlayer(player_t *);
 extern animated_model_t * loadingConfigured(unsigned int, int, float, uint32_t, uint32_t, string, string, bool = false);
+extern animated_model_t * loadingConfigured(unsigned int, int, float, uint32_t, uint32_t, string, string,
+                                             bool, int, int, int);
+extern animated_model_t * loadingConfigured(unsigned int, int, float, uint32_t, uint32_t, string, string,
+                                             bool, int, int, int, float, float, float, uint32_t, uint32_t);
 extern animated_model_t * loadZTPFile(const string &);
 extern int activeFace;
 extern int activeModel;
@@ -36,6 +46,7 @@ extern float defLight[3];
 extern HWND hwnd;
 float animationPlaybackSpeed = 1.0f;
 float cameraMovementSpeed = 1.0f;
+extern bool animationLoopPlayback;
 
 namespace
 {
@@ -46,14 +57,18 @@ const int IDM_COMPARISON_REMOVE = 1004;
 const int IDC_COMPARISON_FILE = 1005;
 const int IDM_FILE_SAVE = 1006;
 const int IDM_FILE_SAVE_AS = 1007;
+const int IDM_EXPORT_SKELETON = 1008;
 const int IDM_OPTIONS = 1101;
 const int SIDE_PANEL_WIDTH = ZTP_SIDE_PANEL_WIDTH;
 const int IDC_FRAME_COUNT = 2001;
+const int IDC_FRAME_COUNT_LABEL = 2009;
 const int IDC_SGL_MODE = 2002;
 const int IDC_SCALE = 2003;
 const int IDC_USE_UV = 2004;
 const int IDC_FORCE_4BPP = 2005;
 const int IDC_POWER_OF_8 = 2006;
+const int IDC_MAX_TEXTURE_WIDTH = 2007;
+const int IDC_MAX_TEXTURE_HEIGHT = 2008;
 const int IDC_OPEN_ANOTHER = 2101;
 const int IDC_CURRENT_FILE = 2102;
 const int IDC_SURFACE_STATUS = 2103;
@@ -75,6 +90,14 @@ const int IDC_MODEL_GROUP = 2130;
 const int IDC_SURFACE_GROUP = 2131;
 const int IDC_ANIMATION_SPEED_LABEL = 2140;
 const int IDC_ANIMATION_SPEED = 2141;
+const int IDC_ANIMATION_START = 2146;
+const int IDC_ANIMATION_END = 2147;
+const int IDC_ANIMATION_RANGE_APPLY = 2148;
+const int IDC_ANIMATION_START_LABEL = 2173;
+const int IDC_ANIMATION_END_LABEL = 2174;
+const int IDC_ANIMATION_LIST = 2175;
+const int IDC_ANIMATION_ADD = 2176;
+const int IDC_ANIMATION_DELETE = 2177;
 const int IDC_CAMERA_SPEED_LABEL = 2142;
 const int IDC_CAMERA_SPEED = 2143;
 const int IDC_WIREFRAME = 2144;
@@ -90,6 +113,20 @@ const int IDC_LOD_SHOW = 2163;
 const int IDC_LOD_STATUS = 2164;
 const int IDC_LOD_LEVEL = 2165;
 const int IDC_LOD_DELETE = 2166;
+const int IDC_LOD_MERGE_QUADS = 2178;
+const int IDC_ROTATION_X = 2167;
+const int IDC_ROTATION_Y = 2168;
+const int IDC_ROTATION_Z = 2169;
+const int IDC_TRANSLATION_X = 2170;
+const int IDC_TRANSLATION_Y = 2171;
+const int IDC_TRANSLATION_Z = 2172;
+const int IDC_ANIMATION_NAME = 2179;
+const int IDC_ANIMATION_NAME_LABEL = 2180;
+const int IDC_ANIMATION_LOOP = 2181;
+const int IDC_BONE_PREVIEW = 2182;
+const int IDC_ANIMATION_FRAME_DELTA_LABEL = 2183;
+const int IDC_ANIMATION_FRAME_DELTA = 2184;
+const int IDC_ANIMATION_RESAMPLE = 2185;
 const float animationSpeedValues[] = {0.0f, 0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
 const float cameraSpeedValues[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f, 16.0f};
 
@@ -100,19 +137,49 @@ struct LoadOptions
     float scale;
     bool useUv;
     uint32_t specialOptions;
+    uint32_t maxTextureWidth;
+    uint32_t maxTextureHeight;
+    int rotationX;
+    int rotationY;
+    int rotationZ;
+    float translationX;
+    float translationY;
+    float translationZ;
 };
 
-LoadOptions loadOptions = {100, 0, 1.0f, true, 1};
+struct LoadOptionsDialogContext
+{
+    LoadOptions * options;
+    bool showFrameCount;
+};
+
+struct PreviewAnimationRange
+{
+    unsigned int startFrame;
+    unsigned int endFrame;
+    string name;
+    bool loop;
+    unsigned int frameDelta;
+    unsigned int storedDelta;
+};
+
+LoadOptions loadOptions = {100, 0, 1.0f, true, 1, 1024, 256, 0, 0, 0, 0.0f, 0.0f, 0.0f};
 animated_model_t * currentModel = NULL;
 animated_model_t * comparisonModel = NULL;
 std::vector<unsigned int> comparisonTextureIds;
+std::vector<PreviewAnimationRange> addedAnimations;
 std::vector<string> protectedReferencePaths;
-LoadOptions comparisonOptions = {256, 0, 1.0f, true, 1};
+LoadOptions comparisonOptions = {static_cast<int>(ZTP_MAX_ANIMATION_FRAMES), 0, 1.0f, true, 1, 1024, 256, 0, 0, 0, 0.0f, 0.0f, 0.0f};
 string currentFolder;
 string currentFile;
 bool glReady = false;
 bool currentModelIsZTP = false;
+bool currentModelIsObj = false;
+bool updatingAnimationName = false;
+bool experimentalAnimationResampling = false;
+bool ztpBaseReplaced = false;
 string ztpSavePath;
+string convertedModelSavePath;
 bool ztpSaved = false;
 uint32_t savedEditRevision = 0;
 uint32_t savedLodRevision = 0;
@@ -128,11 +195,16 @@ void updateFileMenu(HWND owner)
     if (!fileMenu) return;
     DeleteMenu(fileMenu, IDM_FILE_SAVE, MF_BYCOMMAND);
     DeleteMenu(fileMenu, IDM_FILE_SAVE_AS, MF_BYCOMMAND);
-    if (currentModelIsZTP)
+    if (currentModel)
     {
         InsertMenuA(fileMenu, IDM_COMPARISON_OPEN, MF_BYCOMMAND | MF_STRING, IDM_FILE_SAVE, "Save");
         InsertMenuA(fileMenu, IDM_COMPARISON_OPEN, MF_BYCOMMAND | MF_STRING, IDM_FILE_SAVE_AS, "Save as...");
+        const UINT saveState = MF_BYCOMMAND | (USE_SGL == 2 ? MF_GRAYED : MF_ENABLED);
+        EnableMenuItem(fileMenu, IDM_FILE_SAVE, saveState);
+        EnableMenuItem(fileMenu, IDM_FILE_SAVE_AS, saveState);
     }
+    EnableMenuItem(fileMenu, IDM_EXPORT_SKELETON, MF_BYCOMMAND |
+        (hasFbxSkeleton(currentModel) ? MF_ENABLED : MF_GRAYED));
     DrawMenuBar(owner);
 }
 
@@ -155,28 +227,448 @@ void refreshLodControls(HWND owner, unsigned int selected = 0)
     if (selected) selectAutomaticLod(currentModel, selected);
     else resetAutomaticLod();
     CheckDlgButton(owner, IDC_LOD_SHOW, selected ? BST_CHECKED : BST_UNCHECKED);
-    char status[80];
-    if (selected)
-    {
-        unsigned int baseFaces = 0;
+    unsigned int baseFaces = 0, basePoints = 0;
+    if (currentModel)
         for (unsigned int mesh = 0; mesh < currentModel->nbModels; ++mesh)
+        {
             baseFaces += currentModel->model[mesh].nbPolygon;
-        sprintf(status, "Faces: %u / %u\r\nUsed points: %u", automaticLodFaceCount(), baseFaces, automaticLodPointCount());
-    }
-    else sprintf(status, "LOD levels: %u", count);
+            basePoints += currentModel->model[mesh].nbPoint;
+        }
+    char status[128];
+    const double textureSizeKiB = calculateTextureExportSize(currentModel, false) / 1024.0;
+    if (selected)
+        sprintf(status, "Faces: %u / %u\r\nPoints: %u / %u\r\nTextures: %.1f KiB",
+            automaticLodFaceCount(), baseFaces, automaticLodPointCount(), basePoints, textureSizeKiB);
+    else sprintf(status, "Faces: %u\r\nPoints: %u\r\nTextures: %.1f KiB",
+        baseFaces, basePoints, textureSizeKiB);
     SetDlgItemTextA(owner, IDC_LOD_STATUS, status);
+}
+
+void refreshAnimationRangeControls(HWND owner, animated_model_t * model)
+{
+    const bool enabled = model && model->nbFrames > 0;
+    const uint32_t frameUnit = MAX(1u, MIN(static_cast<uint32_t>(PLAYER[0].ANIMCTRL.sourceFrameDelta), 60u));
+    const unsigned int maxFrame = enabled ? MIN(MIN(model->nbFrames - 1, 0xFFFEu), 0x10000u / frameUnit - 1) : 0;
+    const unsigned int endFrame = enabled ? MIN(PLAYER[0].ANIMCTRL.endFrm, maxFrame + 1) : 0;
+    char value[32];
+    sprintf(value, "%u", enabled ? MIN(PLAYER[0].ANIMCTRL.startFrm, maxFrame) : 0);
+    SetDlgItemTextA(owner, IDC_ANIMATION_START, value);
+    sprintf(value, "%u", endFrame ? endFrame - 1 : maxFrame);
+    SetDlgItemTextA(owner, IDC_ANIMATION_END, value);
+    EnableWindow(GetDlgItem(owner, IDC_ANIMATION_START), enabled);
+    EnableWindow(GetDlgItem(owner, IDC_ANIMATION_END), enabled);
+    EnableWindow(GetDlgItem(owner, IDC_ANIMATION_RANGE_APPLY), enabled);
+}
+
+unsigned int maxPreviewFrame(animated_model_t * model)
+{
+    if (!model || !model->nbFrames) return 0;
+    const uint32_t frameUnit = MAX(1u, MIN(static_cast<uint32_t>(PLAYER[0].ANIMCTRL.sourceFrameDelta), 60u));
+    return MIN(MIN(model->nbFrames - 1, 0xFFFEu), 0x10000u / frameUnit - 1);
+}
+
+void setAnimationPreviewRange(unsigned int startFrame, unsigned int endFrame)
+{
+    const uint32_t frameUnit = MAX(1u, MIN(static_cast<uint32_t>(PLAYER[0].ANIMCTRL.sourceFrameDelta), 60u));
+    PLAYER[0].ANIMCTRL.startFrm = static_cast<uint16_t>(startFrame);
+    PLAYER[0].ANIMCTRL.endFrm = static_cast<uint16_t>(endFrame + 1);
+    PLAYER[0].ANIMCTRL.currentFrm = static_cast<uint16_t>(startFrame * frameUnit);
+    PLAYER[0].ANIMCTRL.currentKeyFrm = static_cast<uint16_t>(startFrame);
+    resetAnimationPlaybackTiming();
+    refreshAnimationRangeControls(hwnd, currentModel);
+}
+
+void refreshAddedAnimations(HWND owner, unsigned int selected);
+
+string animationSidecarPath()
+{
+    if (currentModelIsZTP) return ztpSavePath + ".animations.txt";
+    return currentFolder + currentFile + ".animations.txt";
+}
+
+unsigned int selectedAnimationIndex()
+{
+    const LRESULT selected = SendDlgItemMessageA(hwnd, IDC_ANIMATION_LIST, CB_GETCURSEL, 0, 0);
+    return selected >= 0 && static_cast<unsigned int>(selected) < addedAnimations.size() ?
+        static_cast<unsigned int>(selected) : 0xFFFFFFFFu;
+}
+
+unsigned int activeAnimationFrameDelta()
+{
+    const unsigned int selected = selectedAnimationIndex();
+    return experimentalAnimationResampling && selected < addedAnimations.size() ?
+        addedAnimations[selected].frameDelta : 4;
+}
+
+unsigned int activeAnimationStoredDelta()
+{
+    const unsigned int selected = selectedAnimationIndex();
+    return selected < addedAnimations.size() ? addedAnimations[selected].storedDelta : 4;
+}
+
+bool hasAnimatedPointPositions(const animated_model_t * model)
+{
+    if (!model || model->nbFrames < 2 || !model->keyFrames || !model->keyFrames[0].cVert) return false;
+    unsigned int totalPoints = 0;
+    for (unsigned int mesh = 0; mesh < model->nbModels; ++mesh)
+        totalPoints += model->model[mesh].nbPoint;
+
+    const vertex_t * firstFrame = model->keyFrames[0].cVert;
+    for (unsigned int frame = 1; frame < model->nbFrames; ++frame)
+    {
+        const vertex_t * vertices = model->keyFrames[frame].cVert;
+        if (!vertices) return false;
+        for (unsigned int point = 0; point < totalPoints; ++point)
+            for (unsigned int axis = 0; axis < XYZ; ++axis)
+                if (std::fabs(vertices[point].point[axis] - firstFrame[point].point[axis]) > 1.0e-6f)
+                    return true;
+    }
+    return false;
+}
+
+bool writeAnimationSidecar(const string & path, const std::vector<PreviewAnimationRange> & animations)
+{
+    if (animations.empty())
+    {
+        if (DeleteFileA(path.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND ||
+            GetLastError() == ERROR_PATH_NOT_FOUND) return true;
+        return false;
+    }
+
+    const string temporaryPath = path + ".tmp";
+    std::ofstream output(temporaryPath.c_str(), std::ios::out | std::ios::trunc);
+    if (!output) return false;
+    output << "ZTP_ANIMATIONS 4\n";
+    for (const PreviewAnimationRange & animation : animations)
+        output << animation.startFrame << ' ' << animation.endFrame << ' '
+               << (animation.loop ? 1 : 0) << ' ' << animation.frameDelta << ' '
+               << animation.storedDelta << ' ' << animation.name << '\n';
+    output.close();
+    if (!output.good() || !MoveFileExA(temporaryPath.c_str(), path.c_str(),
+        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    {
+        DeleteFileA(temporaryPath.c_str());
+        return false;
+    }
+    return true;
+}
+
+bool saveAnimationSidecar()
+{
+    return writeAnimationSidecar(animationSidecarPath(), addedAnimations);
+}
+
+void loadAnimationSidecar(animated_model_t * model)
+{
+    const string path = animationSidecarPath();
+    std::ifstream input(path.c_str());
+    if (!input.is_open())
+    {
+        const DWORD attributes = GetFileAttributesA(path.c_str());
+        const DWORD pathError = attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() : ERROR_SUCCESS;
+        const bool missing = pathError == ERROR_FILE_NOT_FOUND || pathError == ERROR_PATH_NOT_FOUND;
+        if (!missing)
+        {
+            MessageBoxA(hwnd, "Could not read the animation ranges file.",
+                        "Animation load failed", MB_OK | MB_ICONERROR);
+            return;
+        }
+        if (currentModelIsZTP || currentModelIsObj || !hasAnimatedPointPositions(model)) return;
+
+        unsigned int endFrame = maxPreviewFrame(model);
+        string name = currentFile;
+        const size_t extension = name.find_last_of('.');
+        if (extension != string::npos) name.resize(extension);
+        addedAnimations.push_back({0, endFrame, name, true, 4, 4});
+        if (!saveAnimationSidecar())
+        {
+            addedAnimations.pop_back();
+            MessageBoxA(hwnd, "Could not create the animation ranges file.",
+                        "Animation save failed", MB_OK | MB_ICONERROR);
+            refreshAddedAnimations(hwnd, 0xFFFFFFFFu);
+            return;
+        }
+        refreshAddedAnimations(hwnd, 0);
+        setAnimationPreviewRange(0, endFrame);
+        return;
+    }
+
+    string header;
+    if (!std::getline(input, header)) return;
+    if (!header.empty() && header[header.size() - 1] == '\r') header.resize(header.size() - 1);
+    const bool versionOne = header == "ZTP_ANIMATIONS 1";
+    const bool versionTwo = header == "ZTP_ANIMATIONS 2";
+    const bool versionThree = header == "ZTP_ANIMATIONS 3";
+    if (!versionOne && !versionTwo && !versionThree && header != "ZTP_ANIMATIONS 4") return;
+
+    const unsigned int maxFrame = maxPreviewFrame(model);
+    string line;
+    while (addedAnimations.size() < 12 && std::getline(input, line))
+    {
+        std::istringstream entry(line);
+        unsigned int startFrame = 0;
+        unsigned int endFrame = 0;
+        if (!(entry >> startFrame >> endFrame) || startFrame > endFrame || startFrame > maxFrame)
+            continue;
+        unsigned int loopValue = 1;
+        unsigned int frameDelta = 4;
+        unsigned int storedDelta = 4;
+        if ((!versionOne && (!(entry >> loopValue) || loopValue > 1)) ||
+            ((versionThree || header == "ZTP_ANIMATIONS 4") &&
+             (!(entry >> frameDelta) || frameDelta < 1 || frameDelta > 16)) ||
+            (header == "ZTP_ANIMATIONS 4" &&
+             (!(entry >> storedDelta) || storedDelta < 1 || storedDelta > 16))) continue;
+        if (versionThree) storedDelta = frameDelta;
+        string name;
+        std::getline(entry >> std::ws, name);
+        if (!name.empty() && name[name.size() - 1] == '\r') name.resize(name.size() - 1);
+        if (name.size() > 48) name.resize(48);
+        addedAnimations.push_back({startFrame, MIN(endFrame, maxFrame), name, loopValue != 0,
+                                   frameDelta, storedDelta});
+    }
+    experimentalAnimationResampling = std::any_of(addedAnimations.begin(), addedAnimations.end(),
+        [](const PreviewAnimationRange & animation) {
+            return animation.frameDelta != animation.storedDelta;
+        });
+    if (!addedAnimations.empty())
+    {
+        refreshAddedAnimations(hwnd, 0);
+        animationLoopPlayback = addedAnimations[0].loop;
+        PLAYER[0].ANIMCTRL.frameDelta = activeAnimationFrameDelta();
+        PLAYER[0].ANIMCTRL.sourceFrameDelta = activeAnimationStoredDelta();
+        setAnimationPreviewRange(addedAnimations[0].startFrame, addedAnimations[0].endFrame);
+    }
+}
+
+void commitSelectedAnimationName(HWND owner)
+{
+    if (updatingAnimationName) return;
+    const LRESULT selected = SendDlgItemMessageA(owner, IDC_ANIMATION_LIST, CB_GETCURSEL, 0, 0);
+    if (selected < 0 || static_cast<unsigned int>(selected) >= addedAnimations.size()) return;
+    char name[49] = {};
+    GetDlgItemTextA(owner, IDC_ANIMATION_NAME, name, sizeof(name));
+    addedAnimations[static_cast<unsigned int>(selected)].name = name;
+    if (!saveAnimationSidecar())
+        MessageBoxA(owner, "Could not save the animation ranges file.",
+                    "Animation save failed", MB_OK | MB_ICONERROR);
+}
+
+void refreshAddedAnimations(HWND owner, unsigned int selected)
+{
+    SendDlgItemMessageA(owner, IDC_ANIMATION_LIST, CB_RESETCONTENT, 0, 0);
+    for (unsigned int index = 0; index < addedAnimations.size(); ++index)
+    {
+        char label[128];
+        if (addedAnimations[index].name.empty())
+            sprintf(label, "Animation %u (%u-%u, d%u)", index + 1,
+                addedAnimations[index].startFrame, addedAnimations[index].endFrame,
+                addedAnimations[index].frameDelta);
+        else
+            sprintf(label, "%s (%u-%u, d%u)", addedAnimations[index].name.c_str(),
+                addedAnimations[index].startFrame, addedAnimations[index].endFrame,
+                addedAnimations[index].frameDelta);
+        SendDlgItemMessageA(owner, IDC_ANIMATION_LIST, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
+    }
+    if (selected < addedAnimations.size())
+        SendDlgItemMessageA(owner, IDC_ANIMATION_LIST, CB_SETCURSEL, selected, 0);
+    else
+        SendDlgItemMessageA(owner, IDC_ANIMATION_LIST, CB_SETCURSEL, static_cast<WPARAM>(-1), 0);
+    EnableWindow(GetDlgItem(owner, IDC_ANIMATION_LIST), !addedAnimations.empty());
+    EnableWindow(GetDlgItem(owner, IDC_ANIMATION_ADD), currentModel && currentModel->nbFrames > 0 &&
+        (!addedAnimations.empty() || addedAnimations.size() < 12));
+    EnableWindow(GetDlgItem(owner, IDC_ANIMATION_DELETE), !addedAnimations.empty());
+    const bool hasSelection = selected < addedAnimations.size();
+    updatingAnimationName = true;
+    SetDlgItemTextA(owner, IDC_ANIMATION_NAME,
+        hasSelection ? addedAnimations[selected].name.c_str() : "");
+    CheckDlgButton(owner, IDC_ANIMATION_LOOP,
+        hasSelection && addedAnimations[selected].loop ? BST_CHECKED : BST_UNCHECKED);
+    updatingAnimationName = false;
+    EnableWindow(GetDlgItem(owner, IDC_ANIMATION_NAME_LABEL), hasSelection);
+    EnableWindow(GetDlgItem(owner, IDC_ANIMATION_NAME), hasSelection);
+    EnableWindow(GetDlgItem(owner, IDC_ANIMATION_LOOP), hasSelection);
+    EnableWindow(GetDlgItem(owner, IDC_ANIMATION_FRAME_DELTA_LABEL), hasSelection);
+    EnableWindow(GetDlgItem(owner, IDC_ANIMATION_FRAME_DELTA), hasSelection);
+    if (hasSelection)
+        SendDlgItemMessageA(owner, IDC_ANIMATION_FRAME_DELTA, CB_SETCURSEL,
+            addedAnimations[selected].frameDelta - 1, 0);
+    else
+        SendDlgItemMessageA(owner, IDC_ANIMATION_FRAME_DELTA, CB_SETCURSEL, static_cast<WPARAM>(-1), 0);
+    EnableWindow(GetDlgItem(owner, IDC_ANIMATION_RESAMPLE), currentModel && currentModel->nbFrames > 1);
+    CheckDlgButton(owner, IDC_ANIMATION_RESAMPLE,
+        experimentalAnimationResampling ? BST_CHECKED : BST_UNCHECKED);
+}
+
+bool readClampedAnimationFrame(HWND owner, int controlId, unsigned int maxFrame,
+                               unsigned int * frame, bool * wasClamped)
+{
+    char text[32] = {};
+    GetDlgItemTextA(owner, controlId, text, sizeof(text));
+    char * end = NULL;
+    const long parsed = std::strtol(text, &end, 10);
+    if (end == text) return false;
+    while (*end && std::isspace(static_cast<unsigned char>(*end))) ++end;
+    if (*end) return false;
+
+    *wasClamped = parsed < 0 || static_cast<unsigned long>(parsed) > maxFrame;
+    if (parsed < 0) *frame = 0;
+    else if (static_cast<unsigned long>(parsed) > maxFrame) *frame = maxFrame;
+    else *frame = static_cast<unsigned int>(parsed);
+    return true;
+}
+
+bool applyAnimationRange(HWND owner)
+{
+    if (!currentModel || !currentModel->nbFrames) return false;
+    const unsigned int maxFrame = maxPreviewFrame(currentModel);
+    unsigned int startFrame = 0;
+    unsigned int endFrame = 0;
+    bool startClamped = false;
+    bool endClamped = false;
+    if (!readClampedAnimationFrame(owner, IDC_ANIMATION_START, maxFrame, &startFrame, &startClamped) ||
+        !readClampedAnimationFrame(owner, IDC_ANIMATION_END, maxFrame, &endFrame, &endClamped))
+    {
+        MessageBoxA(owner, "Choose a valid frame range within the model.",
+                    "Invalid animation range", MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    if (startFrame > endFrame)
+    {
+        if (startClamped) endFrame = startFrame;
+        else if (endClamped) startFrame = endFrame;
+        else
+        {
+            MessageBoxA(owner, "The start frame must not be after the end frame.",
+                        "Invalid animation range", MB_OK | MB_ICONWARNING);
+            return false;
+        }
+    }
+
+    char clampedText[16];
+    sprintf(clampedText, "%u", startFrame);
+    SetDlgItemTextA(owner, IDC_ANIMATION_START, clampedText);
+    sprintf(clampedText, "%u", endFrame);
+    SetDlgItemTextA(owner, IDC_ANIMATION_END, clampedText);
+    setAnimationPreviewRange(startFrame, endFrame);
+    return true;
+}
+
+bool chooseAnimationAction(HWND owner, bool * add, unsigned int * replaceIndex)
+{
+    HMENU menu = CreatePopupMenu();
+    if (!menu) return false;
+    AppendMenuA(menu, MF_STRING | (addedAnimations.size() >= 12 ? MF_GRAYED : 0), 1, "Add animation");
+    if (!addedAnimations.empty()) AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    for (unsigned int index = 0; index < addedAnimations.size(); ++index)
+    {
+        char label[80];
+        const string displayName = addedAnimations[index].name.empty() ?
+            "Animation " + std::to_string(index + 1) : addedAnimations[index].name;
+        sprintf(label, "Replace %s (%u-%u)", displayName.c_str(),
+            addedAnimations[index].startFrame, addedAnimations[index].endFrame);
+        AppendMenuA(menu, MF_STRING, 100 + index, label);
+    }
+    SetMenuDefaultItem(menu, addedAnimations.size() < 12 ? 1 : 100, FALSE);
+    RECT button;
+    GetWindowRect(GetDlgItem(owner, IDC_ANIMATION_ADD), &button);
+    const UINT chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN,
+        button.left, button.bottom, 0, owner, NULL);
+    DestroyMenu(menu);
+    if (!chosen) return false;
+    *add = chosen == 1;
+    *replaceIndex = chosen >= 100 ? chosen - 100 : 0;
+    return true;
+}
+
+void addOrReplaceAnimation(HWND owner)
+{
+    if (!applyAnimationRange(owner)) return;
+    bool add = false;
+    unsigned int replaceIndex = 0;
+    if (!chooseAnimationAction(owner, &add, &replaceIndex)) return;
+    if (add)
+        addedAnimations.push_back({PLAYER[0].ANIMCTRL.startFrm,
+            static_cast<unsigned int>(PLAYER[0].ANIMCTRL.endFrm - 1), string(), true, 4, 4});
+    else if (replaceIndex < addedAnimations.size())
+    {
+        addedAnimations[replaceIndex].startFrame = PLAYER[0].ANIMCTRL.startFrm;
+        addedAnimations[replaceIndex].endFrame = static_cast<unsigned int>(PLAYER[0].ANIMCTRL.endFrm - 1);
+    }
+    else return;
+    const unsigned int selected = add ? static_cast<unsigned int>(addedAnimations.size() - 1) : replaceIndex;
+    animationLoopPlayback = addedAnimations[selected].loop;
+    refreshAddedAnimations(owner, selected);
+    PLAYER[0].ANIMCTRL.frameDelta = activeAnimationFrameDelta();
+    PLAYER[0].ANIMCTRL.sourceFrameDelta = activeAnimationStoredDelta();
+    setAnimationPreviewRange(addedAnimations[selected].startFrame, addedAnimations[selected].endFrame);
+    if (!saveAnimationSidecar())
+        MessageBoxA(owner, "Could not save the animation ranges file.",
+                    "Animation save failed", MB_OK | MB_ICONERROR);
+}
+
+void selectAddedAnimation(HWND owner)
+{
+    const LRESULT selected = SendDlgItemMessageA(owner, IDC_ANIMATION_LIST, CB_GETCURSEL, 0, 0);
+    if (selected < 0 || static_cast<unsigned int>(selected) >= addedAnimations.size()) return;
+    const PreviewAnimationRange & range = addedAnimations[static_cast<unsigned int>(selected)];
+    animationLoopPlayback = range.loop;
+    PLAYER[0].ANIMCTRL.frameDelta = activeAnimationFrameDelta();
+    CheckDlgButton(owner, IDC_ANIMATION_LOOP, range.loop ? BST_CHECKED : BST_UNCHECKED);
+    updatingAnimationName = true;
+    SetDlgItemTextA(owner, IDC_ANIMATION_NAME, range.name.c_str());
+    updatingAnimationName = false;
+    setAnimationPreviewRange(range.startFrame, range.endFrame);
+}
+
+void deleteSelectedAnimation(HWND owner)
+{
+    const LRESULT selected = SendDlgItemMessageA(owner, IDC_ANIMATION_LIST, CB_GETCURSEL, 0, 0);
+    if (selected < 0 || static_cast<unsigned int>(selected) >= addedAnimations.size()) return;
+    char question[96];
+    sprintf(question, "Delete Animation %u (%u-%u)?", static_cast<unsigned int>(selected) + 1,
+        addedAnimations[selected].startFrame, addedAnimations[selected].endFrame);
+    if (MessageBoxA(owner, question, "Delete animation", MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) != IDYES)
+        return;
+    addedAnimations.erase(addedAnimations.begin() + selected);
+    if (!saveAnimationSidecar())
+        MessageBoxA(owner, "Could not save the animation ranges file.",
+                    "Animation save failed", MB_OK | MB_ICONERROR);
+    if (addedAnimations.empty())
+    {
+        PLAYER[0].ANIMCTRL.frameDelta = 4;
+        PLAYER[0].ANIMCTRL.sourceFrameDelta = 4;
+        setAnimationPreviewRange(0, maxPreviewFrame(currentModel));
+        refreshAddedAnimations(owner, 0xFFFFFFFFu);
+    }
+    else
+    {
+        const unsigned int next = MIN(static_cast<unsigned int>(selected),
+                                      static_cast<unsigned int>(addedAnimations.size() - 1));
+        refreshAddedAnimations(owner, next);
+        selectAddedAnimation(owner);
+    }
 }
 
 void resetModelAnimation(animated_model_t * model)
 {
     resetAutomaticLod();
+    setFbxBonePreview(model, false);
+    CheckDlgButton(hwnd, IDC_BONE_PREVIEW, BST_UNCHECKED);
+    EnableWindow(GetDlgItem(hwnd, IDC_BONE_PREVIEW), hasFbxBonePreview(model));
     CheckDlgButton(hwnd, IDC_LOD_SHOW, BST_UNCHECKED);
     EnableWindow(GetDlgItem(hwnd, IDC_LOD_SHOW), FALSE);
     EnableWindow(GetDlgItem(hwnd, IDC_LOD_GENERATE), TRUE);
-    SetDlgItemTextA(hwnd, IDC_LOD_STATUS, "LOD: not generated");
+    EnableWindow(GetDlgItem(hwnd, IDC_LOD_MERGE_QUADS), model != NULL);
     ZeroMemory(&PLAYER[0].ANIMCTRL, sizeof(PLAYER[0].ANIMCTRL));
-    PLAYER[0].ANIMCTRL.fps = 2;
-    PLAYER[0].ANIMCTRL.endFrm = model->nbFrames > 0xFFFFu ? 0xFFFFu : static_cast<uint16_t>(model->nbFrames);
+    PLAYER[0].ANIMCTRL.frameDelta = 4;
+    PLAYER[0].ANIMCTRL.sourceFrameDelta = 4;
+    const unsigned int maxFrame = maxPreviewFrame(model);
+    PLAYER[0].ANIMCTRL.endFrm = model && model->nbFrames ? static_cast<uint16_t>(maxFrame + 1) : 0;
+    addedAnimations.clear();
+    animationLoopPlayback = true;
+    experimentalAnimationResampling = false;
+    refreshAnimationRangeControls(hwnd, model);
+    refreshAddedAnimations(hwnd, 0xFFFFFFFFu);
     playAnimation = 1;
     resetAnimationPlaybackTiming();
     initializeLightSource(model);
@@ -184,37 +676,46 @@ void resetModelAnimation(animated_model_t * model)
     refreshLodControls(hwnd);
 }
 
-bool chooseLodGeneration(HWND owner, unsigned int reduction, unsigned int * replaceLevel)
+bool chooseLodGeneration(HWND owner, unsigned int reduction, unsigned int * replaceLevel,
+                        bool * replaceBase, bool * restoreBase)
 {
-    if (!reduction)
+    const bool canRestoreBase = hasAutomaticLodBaseSnapshot(currentModel);
+    if (!reduction && !canRestoreBase)
     {
         MessageBoxA(owner, "Choose a reduction between 1 and 99%.", "LOD reduction", MB_OK | MB_ICONWARNING);
         return false;
     }
     const unsigned int count = automaticLodLevelCount(currentModel);
     *replaceLevel = 0;
-    if (!count) return true;
+    *replaceBase = false;
+    *restoreBase = false;
     unsigned int matching = 0;
     for (unsigned int level = 1; level <= count; ++level)
         if (currentModel->lodData->levels[level - 1].reduction == reduction) matching = level;
     HMENU menu = CreatePopupMenu();
     if (!menu) return false;
-    AppendMenuA(menu, MF_STRING | ((matching || count >= 63) ? MF_GRAYED : 0), 1, "Add level");
-    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(menu, MF_STRING | ((!reduction || matching || count >= 63) ? MF_GRAYED : 0), 1, "Add LOD level");
+    if (count) AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
     for (unsigned int level = 1; level <= count; ++level)
     {
         char label[64];
         sprintf(label, "Replace LOD %u (%u%%)", level, currentModel->lodData->levels[level - 1].reduction);
         AppendMenuA(menu, MF_STRING | ((matching && matching != level) ? MF_GRAYED : 0), level + 1, label);
     }
-    SetMenuDefaultItem(menu, matching ? matching + 1 : 1, FALSE);
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(menu, MF_STRING | (!reduction ? MF_GRAYED : 0), 1000, "Replace base with reduced mesh");
+    if (canRestoreBase)
+        AppendMenuA(menu, MF_STRING, 1001, "Restore original base");
+    SetMenuDefaultItem(menu, matching ? matching + 1 : (reduction ? 1 : 1001), FALSE);
     RECT button;
     GetWindowRect(GetDlgItem(owner, IDC_LOD_GENERATE), &button);
     const UINT chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN,
         button.left, button.bottom, 0, owner, NULL);
     DestroyMenu(menu);
     if (!chosen) return false;
-    *replaceLevel = chosen - 1;
+    if (chosen == 1000) *replaceBase = true;
+    else if (chosen == 1001) *restoreBase = true;
+    else *replaceLevel = chosen - 1;
     return true;
 }
 
@@ -266,12 +767,55 @@ void createSidePanel(HWND parent)
     addControl(parent, "BUTTON", "Rotate polygon", BS_PUSHBUTTON, 0, 0, 10, 10, IDC_SURFACE_ROTATE);
     addControl(parent, "BUTTON", "Next sort mode", BS_PUSHBUTTON, 0, 0, 10, 10, IDC_SURFACE_SORT);
     addControl(parent, "STATIC", "Sort mode: SORT_CEN", SS_LEFT, 0, 0, 10, 10, IDC_SORT_STATUS);
-    addControl(parent, "STATIC", "Animation speed", SS_LEFT, 0, 0, 10, 10, IDC_ANIMATION_SPEED_LABEL);
+    addControl(parent, "STATIC", "Anim speed", SS_LEFT, 0, 0, 10, 10, IDC_ANIMATION_SPEED_LABEL);
     addControl(parent, "COMBOBOX", "", CBS_DROPDOWNLIST | WS_TABSTOP, 0, 0, 10, 10, IDC_ANIMATION_SPEED);
-    addControl(parent, "STATIC", "Camera speed", SS_LEFT, 0, 0, 10, 10, IDC_CAMERA_SPEED_LABEL);
+    addControl(parent, "STATIC", "Camera", SS_LEFT, 0, 0, 10, 10, IDC_CAMERA_SPEED_LABEL);
     addControl(parent, "COMBOBOX", "", CBS_DROPDOWNLIST | WS_TABSTOP, 0, 0, 10, 10, IDC_CAMERA_SPEED);
+    addControl(parent, "STATIC", "Start", SS_LEFT, 0, 0, 10, 10, IDC_ANIMATION_START_LABEL);
+    addControl(parent, "EDIT", "0", WS_BORDER | ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP,
+        0, 0, 10, 10, IDC_ANIMATION_START);
+    addControl(parent, "STATIC", "End", SS_LEFT, 0, 0, 10, 10, IDC_ANIMATION_END_LABEL);
+    addControl(parent, "EDIT", "0", WS_BORDER | ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP,
+        0, 0, 10, 10, IDC_ANIMATION_END);
+    addControl(parent, "BUTTON", "Apply", BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 10, 10, IDC_ANIMATION_RANGE_APPLY);
+    addControl(parent, "COMBOBOX", "", CBS_DROPDOWNLIST | WS_TABSTOP, 0, 0, 10, 10, IDC_ANIMATION_LIST);
+    addControl(parent, "BUTTON", "Add animation", BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 10, 10, IDC_ANIMATION_ADD);
+    addControl(parent, "BUTTON", "Delete", BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 10, 10, IDC_ANIMATION_DELETE);
+    EnableWindow(GetDlgItem(parent, IDC_ANIMATION_START), FALSE);
+    EnableWindow(GetDlgItem(parent, IDC_ANIMATION_END), FALSE);
+    EnableWindow(GetDlgItem(parent, IDC_ANIMATION_RANGE_APPLY), FALSE);
+    EnableWindow(GetDlgItem(parent, IDC_ANIMATION_LIST), FALSE);
+    EnableWindow(GetDlgItem(parent, IDC_ANIMATION_ADD), FALSE);
+    EnableWindow(GetDlgItem(parent, IDC_ANIMATION_DELETE), FALSE);
+    addControl(parent, "STATIC", "Name", SS_LEFT, 0, 0, 10, 10, IDC_ANIMATION_NAME_LABEL);
+    addControl(parent, "EDIT", "", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP,
+        0, 0, 10, 10, IDC_ANIMATION_NAME);
+    SendDlgItemMessageA(parent, IDC_ANIMATION_NAME, EM_LIMITTEXT, 48, 0);
+    addControl(parent, "BUTTON", "Loop", BS_AUTOCHECKBOX | WS_TABSTOP, 0, 0, 10, 10, IDC_ANIMATION_LOOP);
+    EnableWindow(GetDlgItem(parent, IDC_ANIMATION_NAME_LABEL), FALSE);
+    EnableWindow(GetDlgItem(parent, IDC_ANIMATION_NAME), FALSE);
+    EnableWindow(GetDlgItem(parent, IDC_ANIMATION_LOOP), FALSE);
+    addControl(parent, "STATIC", "Frame delta", SS_LEFT, 0, 0, 10, 10,
+        IDC_ANIMATION_FRAME_DELTA_LABEL);
+    addControl(parent, "COMBOBOX", "", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, 0, 0, 10, 10,
+        IDC_ANIMATION_FRAME_DELTA);
+    for (unsigned int delta = 1; delta <= 16; ++delta)
+    {
+        char label[48];
+        sprintf(label, "%.4g fps (delta %u)", 60.0 / delta, delta);
+        SendDlgItemMessageA(parent, IDC_ANIMATION_FRAME_DELTA, CB_ADDSTRING, 0,
+            reinterpret_cast<LPARAM>(label));
+    }
+    SendDlgItemMessageA(parent, IDC_ANIMATION_FRAME_DELTA, CB_SETCURSEL, 3, 0);
+    EnableWindow(GetDlgItem(parent, IDC_ANIMATION_FRAME_DELTA_LABEL), FALSE);
+    EnableWindow(GetDlgItem(parent, IDC_ANIMATION_FRAME_DELTA), FALSE);
+    addControl(parent, "BUTTON", "Experimental resampling on export",
+        BS_AUTOCHECKBOX | WS_TABSTOP, 0, 0, 10, 10, IDC_ANIMATION_RESAMPLE);
+    EnableWindow(GetDlgItem(parent, IDC_ANIMATION_RESAMPLE), FALSE);
     addControl(parent, "BUTTON", "Wireframe", BS_AUTOCHECKBOX | WS_TABSTOP, 0, 0, 10, 10, IDC_WIREFRAME);
     addControl(parent, "BUTTON", "Self-shadowing", BS_AUTOCHECKBOX | WS_TABSTOP, 0, 0, 10, 10, IDC_SELF_SHADOWING);
+    addControl(parent, "BUTTON", "1-bone preview", BS_AUTOCHECKBOX | WS_TABSTOP, 0, 0, 10, 10, IDC_BONE_PREVIEW);
+    EnableWindow(GetDlgItem(parent, IDC_BONE_PREVIEW), FALSE);
     CheckDlgButton(parent, IDC_SELF_SHADOWING, enableSelfShadowing ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(parent, IDC_WIREFRAME, (DisplayTEST & 1) ? BST_CHECKED : BST_UNCHECKED);
     addControl(parent, "STATIC", "Azimuth: 0 deg", SS_LEFT, 0, 0, 10, 10, IDC_LIGHT_AZIMUTH_LABEL);
@@ -282,15 +826,17 @@ void createSidePanel(HWND parent)
     addControl(parent, TRACKBAR_CLASSA, "", TBS_HORZ | TBS_NOTICKS | WS_TABSTOP, 0, 0, 10, 10, IDC_LOD_REDUCTION);
     SendDlgItemMessageA(parent, IDC_LOD_REDUCTION, TBM_SETRANGE, TRUE, MAKELPARAM(0, 99));
     SendDlgItemMessageA(parent, IDC_LOD_REDUCTION, TBM_SETPOS, TRUE, 75);
-    addControl(parent, "BUTTON", "Generate LOD", BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 10, 10, IDC_LOD_GENERATE);
+    addControl(parent, "BUTTON", "Generate", BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 10, 10, IDC_LOD_GENERATE);
     addControl(parent, "BUTTON", "Show LOD", BS_AUTOCHECKBOX | WS_TABSTOP, 0, 0, 10, 10, IDC_LOD_SHOW);
     addControl(parent, "BUTTON", "Delete LOD", BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 10, 10, IDC_LOD_DELETE);
+    addControl(parent, "BUTTON", "Convert to quads", BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 10, 10, IDC_LOD_MERGE_QUADS);
     EnableWindow(GetDlgItem(parent, IDC_LOD_DELETE), FALSE);
-    addControl(parent, "STATIC", "LOD: not generated", SS_LEFT, 0, 0, 10, 10, IDC_LOD_STATUS);
+    addControl(parent, "STATIC", "Faces: 0\r\nPoints: 0\r\nTextures: 0.0 KiB", SS_LEFT, 0, 0, 10, 10, IDC_LOD_STATUS);
     addControl(parent, "COMBOBOX", "", CBS_DROPDOWNLIST | WS_TABSTOP, 0, 0, 10, 10, IDC_LOD_LEVEL);
     EnableWindow(GetDlgItem(parent, IDC_LOD_LEVEL), FALSE);
     EnableWindow(GetDlgItem(parent, IDC_LOD_SHOW), FALSE);
     EnableWindow(GetDlgItem(parent, IDC_LOD_GENERATE), FALSE);
+    EnableWindow(GetDlgItem(parent, IDC_LOD_MERGE_QUADS), FALSE);
     SendDlgItemMessageA(parent, IDC_LIGHT_AZIMUTH, TBM_SETRANGEMIN, FALSE, -360);
     SendDlgItemMessageA(parent, IDC_LIGHT_AZIMUTH, TBM_SETRANGEMAX, FALSE, 360);
     int initialAzimuth = static_cast<int>(std::lround(std::atan2(-defLight[X], -defLight[Z]) / conv));
@@ -321,9 +867,15 @@ void createSidePanel(HWND parent)
         IDC_SURFACE_PALETTE, IDC_SURFACE_NEAR_CLIP, IDC_SURFACE_REALTIME_GOURAUD,
         IDC_SURFACE_FLIP, IDC_SURFACE_ROTATE, IDC_SURFACE_SORT, IDC_SORT_STATUS,
         IDC_ANIMATION_SPEED_LABEL, IDC_ANIMATION_SPEED, IDC_CAMERA_SPEED_LABEL, IDC_CAMERA_SPEED,
+        IDC_ANIMATION_START_LABEL, IDC_ANIMATION_START, IDC_ANIMATION_END_LABEL,
+        IDC_ANIMATION_END, IDC_ANIMATION_RANGE_APPLY, IDC_ANIMATION_LIST,
+        IDC_ANIMATION_ADD, IDC_ANIMATION_DELETE, IDC_ANIMATION_NAME_LABEL, IDC_ANIMATION_NAME, IDC_ANIMATION_LOOP,
+        IDC_ANIMATION_FRAME_DELTA_LABEL, IDC_ANIMATION_FRAME_DELTA, IDC_ANIMATION_RESAMPLE,
         IDC_WIREFRAME, IDC_SELF_SHADOWING, IDC_LIGHT_AZIMUTH_LABEL, IDC_LIGHT_AZIMUTH,
         IDC_LIGHT_ELEVATION_LABEL, IDC_LIGHT_ELEVATION,
-        IDC_LOD_REDUCTION_LABEL, IDC_LOD_REDUCTION, IDC_LOD_GENERATE, IDC_LOD_SHOW, IDC_LOD_STATUS, IDC_LOD_LEVEL, IDC_LOD_DELETE
+        IDC_BONE_PREVIEW,
+        IDC_LOD_REDUCTION_LABEL, IDC_LOD_REDUCTION, IDC_LOD_GENERATE, IDC_LOD_SHOW, IDC_LOD_STATUS, IDC_LOD_LEVEL,
+        IDC_LOD_DELETE, IDC_LOD_MERGE_QUADS
     };
     for (unsigned int i = 0; i < sizeof(controlIds) / sizeof(controlIds[0]); ++i)
         SendDlgItemMessageA(parent, controlIds[i], WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
@@ -356,26 +908,42 @@ void layoutSidePanel(HWND parent)
         {IDC_SURFACE_ROTATE, 24 + (width - 36) / 2, 382, (width - 36) / 2, 24},
         {IDC_SURFACE_SORT, 20, 412, width - 24, 24},
         {IDC_SORT_STATUS, 20, 440, width - 24, 20},
-        {IDC_ANIMATION_SPEED_LABEL, 20, 475, 160, 22},
-        {IDC_ANIMATION_SPEED, 190, 472, width - 194, 200},
-        {IDC_CAMERA_SPEED_LABEL, 20, 507, 160, 22},
-        {IDC_CAMERA_SPEED, 190, 504, width - 194, 200},
-        {IDC_WIREFRAME, 20, 539, 146, 22},
-        {IDC_SELF_SHADOWING, 174, 539, 146, 22},
-        {IDC_LIGHT_AZIMUTH_LABEL, 20, 563, 146, 20},
-        {IDC_LIGHT_AZIMUTH, 20, 583, 146, 26},
-        {IDC_LIGHT_ELEVATION_LABEL, 174, 563, 146, 20},
-        {IDC_LIGHT_ELEVATION, 174, 583, 146, 26},
-        {IDC_LOD_REDUCTION_LABEL, 20, 614, 146, 22},
-        {IDC_LOD_REDUCTION, 174, 611, 146, 26},
-        {IDC_LOD_GENERATE, 20, 642, 100, 26},
-        {IDC_LOD_SHOW, 128, 642, 84, 26},
-        {IDC_LOD_DELETE, 220, 642, 100, 26},
-        {IDC_LOD_STATUS, 20, 673, 146, 32},
-        {IDC_LOD_LEVEL, 174, 673, 146, 160},
-        {IDM_COMPARISON_OPEN, 20, 709, 146, 26},
-        {IDM_COMPARISON_REMOVE, 174, 709, 146, 26},
-        {IDC_COMPARISON_FILE, 20, 741, width - 24, 36}
+        {IDC_ANIMATION_SPEED_LABEL, 20, 475, 70, 22},
+        {IDC_ANIMATION_SPEED, 90, 472, 78, 200},
+        {IDC_CAMERA_SPEED_LABEL, 176, 475, 55, 22},
+        {IDC_CAMERA_SPEED, 231, 472, 89, 200},
+        {IDC_ANIMATION_START_LABEL, 20, 507, 38, 18},
+        {IDC_ANIMATION_START, 60, 504, 65, 24},
+        {IDC_ANIMATION_END_LABEL, 133, 507, 30, 18},
+        {IDC_ANIMATION_END, 165, 504, 65, 24},
+        {IDC_ANIMATION_RANGE_APPLY, 240, 504, 80, 24},
+        {IDC_ANIMATION_LIST, 20, 535, 142, 160},
+        {IDC_ANIMATION_ADD, 168, 535, 96, 24},
+        {IDC_ANIMATION_DELETE, 270, 535, 50, 24},
+        {IDC_ANIMATION_NAME_LABEL, 168, 565, width - 184, 20},
+        {IDC_ANIMATION_NAME, 168, 584, width - 184, 24},
+        {IDC_ANIMATION_LOOP, 168, 612, width - 184, 22},
+        {IDC_ANIMATION_FRAME_DELTA_LABEL, 20, 640, 84, 20},
+        {IDC_ANIMATION_FRAME_DELTA, 106, 637, 92, 160},
+        {IDC_ANIMATION_RESAMPLE, 20, 664, width - 24, 22},
+        {IDC_WIREFRAME, 20, 690, 146, 22},
+        {IDC_BONE_PREVIEW, 174, 690, 146, 22},
+        {IDC_SELF_SHADOWING, 20, 714, 300, 22},
+        {IDC_LIGHT_AZIMUTH_LABEL, 20, 738, 146, 20},
+        {IDC_LIGHT_AZIMUTH, 20, 758, 146, 26},
+        {IDC_LIGHT_ELEVATION_LABEL, 174, 738, 146, 20},
+        {IDC_LIGHT_ELEVATION, 174, 758, 146, 26},
+        {IDC_LOD_REDUCTION_LABEL, 20, 788, 146, 22},
+        {IDC_LOD_REDUCTION, 174, 785, 146, 26},
+        {IDC_LOD_GENERATE, 20, 814, 66, 26},
+        {IDC_LOD_SHOW, 91, 814, 48, 26},
+        {IDC_LOD_DELETE, 144, 814, 48, 26},
+        {IDC_LOD_MERGE_QUADS, 197, 814, 123, 26},
+        {IDC_LOD_STATUS, 20, 843, 146, 48},
+        {IDC_LOD_LEVEL, 174, 843, 146, 160},
+        {IDM_COMPARISON_OPEN, 20, 893, 146, 26},
+        {IDM_COMPARISON_REMOVE, 174, 893, 146, 26},
+        {IDC_COMPARISON_FILE, 20, 923, width - 24, 26}
     };
     for (unsigned int i = 0; i < sizeof(placements) / sizeof(placements[0]); ++i)
     {
@@ -404,6 +972,8 @@ void resizeOpenGLView(HWND parent)
 
 void updateSurfacePanel(HWND parent, animated_model_t * model)
 {
+    SetDlgItemTextA(parent, IDC_CURRENT_FILE,
+        model && !currentFile.empty() ? currentFile.c_str() : "No model loaded");
     const int editControls[] = {
         IDC_SURFACE_DOUBLE_SIDED, IDC_SURFACE_UV_DIRECTION, IDC_SURFACE_MESH,
         IDC_SURFACE_GOURAUD, IDC_SURFACE_LIGHT, IDC_SURFACE_DEPTH,
@@ -477,38 +1047,87 @@ bool handleSurfaceCommand(HWND parent, int controlId)
 
 INT_PTR CALLBACK OptionsDialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    LoadOptions * options = reinterpret_cast<LoadOptions *>(GetWindowLongPtr(dialog, GWLP_USERDATA));
+    LoadOptionsDialogContext * context = reinterpret_cast<LoadOptionsDialogContext *>(
+        GetWindowLongPtr(dialog, GWLP_USERDATA));
+    LoadOptions * options = context ? context->options : NULL;
     if (message == WM_INITDIALOG)
     {
-        options = reinterpret_cast<LoadOptions *>(lParam);
-        SetWindowLongPtr(dialog, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(options));
-        addControl(dialog, "STATIC", "Animation frames", 0, 10, 12, 120, 18, -1);
+        context = reinterpret_cast<LoadOptionsDialogContext *>(lParam);
+        options = context->options;
+        SetWindowLongPtr(dialog, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(context));
+        const int frameOffset = context->showFrameCount ? 0 : 28;
+        addControl(dialog, "STATIC", "Animation frames", 0, 10, 12, 120, 18, IDC_FRAME_COUNT_LABEL);
         addControl(dialog, "EDIT", "", WS_BORDER | ES_AUTOHSCROLL, 138, 10, 100, 22, IDC_FRAME_COUNT);
-        addControl(dialog, "STATIC", "SGL mode", 0, 10, 40, 120, 18, -1);
+        if (!context->showFrameCount)
+        {
+            ShowWindow(GetDlgItem(dialog, IDC_FRAME_COUNT_LABEL), SW_HIDE);
+            ShowWindow(GetDlgItem(dialog, IDC_FRAME_COUNT), SW_HIDE);
+        }
+        addControl(dialog, "STATIC", "SGL mode", 0, 10, 40 - frameOffset, 120, 18, -1);
         HWND sglCombo = CreateWindowExA(0, "COMBOBOX", "", WS_CHILD | WS_VISIBLE | WS_BORDER | CBS_DROPDOWNLIST,
-                                        138, 38, 150, 80, dialog,
+                        138, 38 - frameOffset, 150, 80, dialog,
                                         reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_SGL_MODE)),
                                         reinterpret_cast<HINSTANCE>(GetWindowLongPtr(dialog, GWLP_HINSTANCE)), NULL);
         SendMessageA(sglCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("Disabled"));
         SendMessageA(sglCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("Enabled"));
         SendMessageA(sglCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("Palette export"));
-        addControl(dialog, "STATIC", "Scale", 0, 10, 68, 120, 18, -1);
-        addControl(dialog, "EDIT", "", WS_BORDER | ES_AUTOHSCROLL, 138, 66, 100, 22, IDC_SCALE);
-        addControl(dialog, "BUTTON", "Generate textures from UV", BS_AUTOCHECKBOX, 10, 96, 240, 20, IDC_USE_UV);
-        addControl(dialog, "BUTTON", "Force 4 BPP", BS_AUTOCHECKBOX, 10, 120, 160, 20, IDC_FORCE_4BPP);
-        addControl(dialog, "BUTTON", "Power-of-8 UV texture height", BS_AUTOCHECKBOX, 10, 144, 250, 20, IDC_POWER_OF_8);
-        addControl(dialog, "BUTTON", "OK", BS_DEFPUSHBUTTON, 108, 174, 70, 24, IDOK);
-        addControl(dialog, "BUTTON", "Cancel", 0, 184, 174, 70, 24, IDCANCEL);
+        addControl(dialog, "STATIC", "Scale", 0, 10, 68 - frameOffset, 120, 18, -1);
+        addControl(dialog, "EDIT", "", WS_BORDER | ES_AUTOHSCROLL, 138, 66 - frameOffset, 100, 22, IDC_SCALE);
+        const int rotationIds[] = {IDC_ROTATION_X, IDC_ROTATION_Y, IDC_ROTATION_Z};
+        const char *rotationLabels[] = {"Rotate X", "Rotate Y", "Rotate Z"};
+        const int rotationValues[] = {options->rotationX, options->rotationY, options->rotationZ};
+        char value[64];
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            const int y = 96 + axis * 24 - frameOffset;
+            addControl(dialog, "STATIC", rotationLabels[axis], 0, 10, y + 2, 120, 18, -1);
+            HWND rotationCombo = CreateWindowExA(0, "COMBOBOX", "",
+                WS_CHILD | WS_VISIBLE | WS_BORDER | CBS_DROPDOWNLIST,
+                138, y, 110, 100, dialog,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(rotationIds[axis])),
+                reinterpret_cast<HINSTANCE>(GetWindowLongPtr(dialog, GWLP_HINSTANCE)), NULL);
+            SendMessageA(rotationCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("0 degrees"));
+            SendMessageA(rotationCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("90 degrees"));
+            SendMessageA(rotationCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("180 degrees"));
+            SendMessageA(rotationCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>("270 degrees"));
+            SendMessageA(rotationCombo, CB_SETCURSEL, rotationValues[axis], 0);
+        }
+        const int translationIds[] = {IDC_TRANSLATION_X, IDC_TRANSLATION_Y, IDC_TRANSLATION_Z};
+        const char *translationLabels[] = {"Translate X", "Translate Y", "Translate Z"};
+        const float translationValues[] = {options->translationX, options->translationY, options->translationZ};
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            const int y = 180 + axis * 24 - frameOffset;
+            addControl(dialog, "STATIC", translationLabels[axis], 0, 10, y + 2, 120, 18, -1);
+            addControl(dialog, "EDIT", "", WS_BORDER | ES_AUTOHSCROLL, 138, y, 100, 22, translationIds[axis]);
+            sprintf(value, "%.6g", translationValues[axis]);
+            SetDlgItemTextA(dialog, translationIds[axis], value);
+        }
+        addControl(dialog, "BUTTON", "Generate textures from UV", BS_AUTOCHECKBOX, 10, 258 - frameOffset, 240, 20, IDC_USE_UV);
+        addControl(dialog, "BUTTON", "Force 4 BPP", BS_AUTOCHECKBOX, 10, 282 - frameOffset, 160, 20, IDC_FORCE_4BPP);
+        addControl(dialog, "BUTTON", "Power-of-8 UV texture height", BS_AUTOCHECKBOX, 10, 306 - frameOffset, 250, 20, IDC_POWER_OF_8);
+        addControl(dialog, "STATIC", "Max texture width", 0, 10, 332 - frameOffset, 120, 18, -1);
+        addControl(dialog, "EDIT", "", WS_BORDER | ES_AUTOHSCROLL, 138, 330 - frameOffset, 100, 22, IDC_MAX_TEXTURE_WIDTH);
+        addControl(dialog, "STATIC", "Max texture height", 0, 10, 356 - frameOffset, 120, 18, -1);
+        addControl(dialog, "EDIT", "", WS_BORDER | ES_AUTOHSCROLL, 138, 354 - frameOffset, 100, 22, IDC_MAX_TEXTURE_HEIGHT);
+        addControl(dialog, "BUTTON", "OK", BS_DEFPUSHBUTTON, 108, 390 - frameOffset, 70, 24, IDOK);
+        addControl(dialog, "BUTTON", "Cancel", 0, 184, 390 - frameOffset, 70, 24, IDCANCEL);
 
-        char value[32];
-        sprintf(value, "%d", options->frameCount);
-        SetDlgItemTextA(dialog, IDC_FRAME_COUNT, value);
+        if (context->showFrameCount)
+        {
+            sprintf(value, "%d", options->frameCount);
+            SetDlgItemTextA(dialog, IDC_FRAME_COUNT, value);
+        }
         sprintf(value, "%.6g", options->scale);
         SetDlgItemTextA(dialog, IDC_SCALE, value);
         SendDlgItemMessageA(dialog, IDC_SGL_MODE, CB_SETCURSEL, options->sglMode, 0);
         CheckDlgButton(dialog, IDC_USE_UV, options->useUv ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(dialog, IDC_FORCE_4BPP, (options->specialOptions & 1) ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(dialog, IDC_POWER_OF_8, (options->specialOptions & 2) ? BST_CHECKED : BST_UNCHECKED);
+        sprintf(value, "%u", options->maxTextureWidth);
+        SetDlgItemTextA(dialog, IDC_MAX_TEXTURE_WIDTH, value);
+        sprintf(value, "%u", options->maxTextureHeight);
+        SetDlgItemTextA(dialog, IDC_MAX_TEXTURE_HEIGHT, value);
         return TRUE;
     }
     if (message == WM_COMMAND && options)
@@ -517,26 +1136,70 @@ INT_PTR CALLBACK OptionsDialogProc(HWND dialog, UINT message, WPARAM wParam, LPA
         {
             char frameText[32] = {};
             char scaleText[64] = {};
-            GetDlgItemTextA(dialog, IDC_FRAME_COUNT, frameText, sizeof(frameText));
+            char translationXText[64] = {};
+            char translationYText[64] = {};
+            char translationZText[64] = {};
+            char maxTextureWidthText[32] = {};
+            char maxTextureHeightText[32] = {};
+            if (context->showFrameCount)
+                GetDlgItemTextA(dialog, IDC_FRAME_COUNT, frameText, sizeof(frameText));
             GetDlgItemTextA(dialog, IDC_SCALE, scaleText, sizeof(scaleText));
-            char * frameEnd = NULL;
+            GetDlgItemTextA(dialog, IDC_TRANSLATION_X, translationXText, sizeof(translationXText));
+            GetDlgItemTextA(dialog, IDC_TRANSLATION_Y, translationYText, sizeof(translationYText));
+            GetDlgItemTextA(dialog, IDC_TRANSLATION_Z, translationZText, sizeof(translationZText));
+            GetDlgItemTextA(dialog, IDC_MAX_TEXTURE_WIDTH, maxTextureWidthText, sizeof(maxTextureWidthText));
+            GetDlgItemTextA(dialog, IDC_MAX_TEXTURE_HEIGHT, maxTextureHeightText, sizeof(maxTextureHeightText));
+            const int rotationX = static_cast<int>(SendDlgItemMessageA(dialog, IDC_ROTATION_X, CB_GETCURSEL, 0, 0));
+            const int rotationY = static_cast<int>(SendDlgItemMessageA(dialog, IDC_ROTATION_Y, CB_GETCURSEL, 0, 0));
+            const int rotationZ = static_cast<int>(SendDlgItemMessageA(dialog, IDC_ROTATION_Z, CB_GETCURSEL, 0, 0));
+            char * frameEnd = frameText;
             char * scaleEnd = NULL;
-            long frameCount = std::strtol(frameText, &frameEnd, 10);
+            char * translationXEnd = NULL;
+            char * translationYEnd = NULL;
+            char * translationZEnd = NULL;
+            char * maxTextureWidthEnd = NULL;
+            char * maxTextureHeightEnd = NULL;
+            long frameCount = options->frameCount;
+            if (context->showFrameCount) frameCount = std::strtol(frameText, &frameEnd, 10);
             float scale = std::strtof(scaleText, &scaleEnd);
+            float translationX = std::strtof(translationXText, &translationXEnd);
+            float translationY = std::strtof(translationYText, &translationYEnd);
+            float translationZ = std::strtof(translationZText, &translationZEnd);
+            unsigned long maxTextureWidth = std::strtoul(maxTextureWidthText, &maxTextureWidthEnd, 10);
+            unsigned long maxTextureHeight = std::strtoul(maxTextureHeightText, &maxTextureHeightEnd, 10);
             int sglMode = static_cast<int>(SendDlgItemMessageA(dialog, IDC_SGL_MODE, CB_GETCURSEL, 0, 0));
-            if (frameEnd == frameText || *frameEnd != '\0' || frameCount < 0 || frameCount > 256 ||
+            if ((context->showFrameCount && (frameEnd == frameText || *frameEnd != '\0' || frameCount < 0 ||
+                frameCount > static_cast<long>(ZTP_MAX_ANIMATION_FRAMES))) ||
                 scaleEnd == scaleText || *scaleEnd != '\0' || !std::isfinite(scale) || scale <= 0.0f ||
-                sglMode < 0 || sglMode > 2)
+                translationXEnd == translationXText || *translationXEnd != '\0' || !std::isfinite(translationX) ||
+                translationYEnd == translationYText || *translationYEnd != '\0' || !std::isfinite(translationY) ||
+                translationZEnd == translationZText || *translationZEnd != '\0' || !std::isfinite(translationZ) ||
+                maxTextureWidthEnd == maxTextureWidthText || *maxTextureWidthEnd != '\0' ||
+                maxTextureWidth < 8 || maxTextureWidth > 65535 ||
+                maxTextureHeightEnd == maxTextureHeightText || *maxTextureHeightEnd != '\0' ||
+                maxTextureHeight < 1 || maxTextureHeight > 256 ||
+                ((IsDlgButtonChecked(dialog, IDC_POWER_OF_8) == BST_CHECKED) && maxTextureHeight < 8) ||
+                sglMode < 0 || sglMode > 2 || rotationX < 0 || rotationX > 3 ||
+                rotationY < 0 || rotationY > 3 || rotationZ < 0 || rotationZ > 3)
             {
-                MessageBoxA(dialog, "Enter 0-256 frames and a positive scale value.", "Invalid options", MB_OK | MB_ICONWARNING);
+                MessageBoxA(dialog, "Enter valid frame, scale, translation and texture dimensions. Width must be at least 8; height must be 1-256 (at least 8 with power-of-8 enabled).",
+                    "Invalid options", MB_OK | MB_ICONWARNING);
                 return TRUE;
             }
-            options->frameCount = static_cast<int>(frameCount);
+            if (context->showFrameCount) options->frameCount = static_cast<int>(frameCount);
             options->sglMode = sglMode;
             options->scale = scale;
             options->useUv = IsDlgButtonChecked(dialog, IDC_USE_UV) == BST_CHECKED;
             options->specialOptions = (IsDlgButtonChecked(dialog, IDC_FORCE_4BPP) == BST_CHECKED ? 1u : 0u) |
                                       (IsDlgButtonChecked(dialog, IDC_POWER_OF_8) == BST_CHECKED ? 2u : 0u);
+            options->maxTextureWidth = static_cast<uint32_t>(maxTextureWidth);
+            options->maxTextureHeight = static_cast<uint32_t>(maxTextureHeight);
+            options->rotationX = rotationX;
+            options->rotationY = rotationY;
+            options->rotationZ = rotationZ;
+            options->translationX = translationX;
+            options->translationY = translationY;
+            options->translationZ = translationZ;
             EndDialog(dialog, IDOK);
             return TRUE;
         }
@@ -549,7 +1212,7 @@ INT_PTR CALLBACK OptionsDialogProc(HWND dialog, UINT message, WPARAM wParam, LPA
     return FALSE;
 }
 
-bool showOptionsDialog(HWND owner, LoadOptions * options)
+bool showOptionsDialog(HWND owner, LoadOptions * options, bool showFrameCount = true)
 {
     struct DialogTemplate
     {
@@ -563,11 +1226,12 @@ bool showOptionsDialog(HWND owner, LoadOptions * options)
     templateData.dialog.cdit = 0;
     templateData.dialog.x = 10;
     templateData.dialog.y = 10;
-    templateData.dialog.cx = 250;
-    templateData.dialog.cy = 205;
+    templateData.dialog.cx = 280;
+    templateData.dialog.cy = showFrameCount ? 432 : 404;
     lstrcpyA(templateData.title, "Converter options");
+    LoadOptionsDialogContext context = {options, showFrameCount};
     return DialogBoxIndirectParamA(GetModuleHandle(NULL), &templateData.dialog, owner,
-                                   OptionsDialogProc, reinterpret_cast<LPARAM>(options)) == IDOK;
+                                   OptionsDialogProc, reinterpret_cast<LPARAM>(&context)) == IDOK;
 }
 
 void releaseModelTextures(animated_model_t * model)
@@ -578,17 +1242,25 @@ void releaseModelTextures(animated_model_t * model)
     glDeleteTextures(1, &asciiTextureId);
 }
 
-bool loadModel(const string & folder, const string & fileName, HWND owner)
+bool loadModel(const string & folder, const string & fileName, HWND owner, bool isObj = false)
 {
     LoadOptions selectedOptions = loadOptions;
-    if (!showOptionsDialog(owner, &selectedOptions)) return false;
+    if (!showOptionsDialog(owner, &selectedOptions, isObj)) return false;
     if (!confirmZTPSave(owner)) return false;
 
-    delete [] skin.pixel;
-    skin.pixel = NULL;
     animated_model_t * nextModel = loadingConfigured(selectedOptions.frameCount, selectedOptions.sglMode,
         selectedOptions.scale, selectedOptions.useUv ? 1u : 0u, selectedOptions.specialOptions,
-        folder, fileName);
+        folder, fileName, false, selectedOptions.rotationX, selectedOptions.rotationY, selectedOptions.rotationZ,
+        selectedOptions.translationX, selectedOptions.translationY, selectedOptions.translationZ,
+        selectedOptions.maxTextureWidth, selectedOptions.maxTextureHeight);
+    if (!nextModel || !nextModel->nbModels)
+    {
+        string error = fbxLoadError.empty() ? "Could not read this model." : fbxLoadError;
+        MessageBoxA(owner, error.c_str(), "Model load failed", MB_OK | MB_ICONERROR);
+        return false;
+    }
+    delete [] skin.pixel;
+    skin.pixel = NULL;
     releaseModelTextures(currentModel);
     deleteModels(currentModel);
     currentModel = nextModel;
@@ -596,13 +1268,17 @@ bool loadModel(const string & folder, const string & fileName, HWND owner)
     currentFolder = folder;
     currentFile = fileName;
     currentModelIsZTP = false;
+    currentModelIsObj = isObj;
+    ztpBaseReplaced = false;
     ztpBasePose.clear();
     ztpSavePath.clear();
+    convertedModelSavePath.clear();
     updateFileMenu(owner);
     clearSelectedSurfaces();
     setTextures(currentModel);
     for (int player = 0; player < 4; ++player) resetPlayer(&PLAYER[player]);
     resetModelAnimation(currentModel);
+    loadAnimationSidecar(currentModel);
     SetWindowTextA(owner, ("ZTP Converter - " + fileName).c_str());
     updateSurfacePanel(owner, currentModel);
     return true;
@@ -624,6 +1300,9 @@ bool loadZTPModel(const string &path, const string &fileName, HWND owner)
     currentFolder = path;
     currentFile = fileName;
     currentModelIsZTP = true;
+    currentModelIsObj = false;
+    ztpBaseReplaced = false;
+    convertedModelSavePath.clear();
     ztpSavePath = absoluteModelPath(path);
     currentFolder = ztpSavePath;
     ztpSaved = false;
@@ -641,8 +1320,168 @@ bool loadZTPModel(const string &path, const string &fileName, HWND owner)
     setTextures(currentModel);
     for (int player = 0; player < 4; ++player) resetPlayer(&PLAYER[player]);
     resetModelAnimation(currentModel);
+    loadAnimationSidecar(currentModel);
     SetWindowTextA(owner, ("ZTP Converter - " + fileName).c_str());
     updateSurfacePanel(owner, currentModel);
+    return true;
+}
+
+bool buildAnimationExport(animated_model_t * source, animated_model_t * output,
+                          std::vector<std::vector<vertex_t> > * sampledFrames,
+                          std::vector<key_frame_t> * frameDescriptors,
+                          std::vector<PreviewAnimationRange> * outputAnimations,
+                          bool filterToAnimations, bool resampleAnimations,
+                          string * error)
+{
+    *output = *source;
+    *outputAnimations = addedAnimations;
+    if (!filterToAnimations || addedAnimations.empty()) return true;
+
+    std::vector<unsigned int> ordered(addedAnimations.size());
+    for (unsigned int index = 0; index < ordered.size(); ++index) ordered[index] = index;
+    std::sort(ordered.begin(), ordered.end(), [](unsigned int first, unsigned int second) {
+        return addedAnimations[first].startFrame < addedAnimations[second].startFrame;
+    });
+    for (unsigned int index = 0; index < ordered.size(); ++index)
+    {
+        const PreviewAnimationRange & animation = addedAnimations[ordered[index]];
+        if (animation.startFrame > animation.endFrame || animation.endFrame >= source->nbFrames ||
+            animation.frameDelta < 1 || animation.frameDelta > 16 ||
+            animation.storedDelta < 1 || animation.storedDelta > 16)
+        {
+            *error = "An animation range or frame delta is invalid; no ZTP file was changed.";
+            return false;
+        }
+        if (!source->keyFrames)
+        {
+            *error = "The source animation has no keyframe data.";
+            return false;
+        }
+        for (unsigned int frame = animation.startFrame; frame <= animation.endFrame; ++frame)
+            if (!source->keyFrames[frame].cVert)
+            {
+                *error = "An animation range references a missing keyframe.";
+                return false;
+            }
+        if (resampleAnimations && index &&
+            animation.startFrame <= addedAnimations[ordered[index - 1]].endFrame)
+        {
+            *error = "Experimental export requires non-overlapping animation ranges.";
+            return false;
+        }
+    }
+
+    std::vector<animationFrameSample_t> samples;
+    std::vector<unsigned int> mappedStarts(addedAnimations.size());
+    std::vector<unsigned int> mappedEnds(addedAnimations.size());
+    if (!resampleAnimations)
+    {
+        std::vector<bool> included(source->nbFrames, false);
+        for (const PreviewAnimationRange & animation : addedAnimations)
+            for (unsigned int frame = animation.startFrame; frame <= animation.endFrame; ++frame)
+                included[frame] = true;
+        std::vector<unsigned int> remap(source->nbFrames, 0xFFFFFFFFu);
+        for (unsigned int frame = 0; frame < included.size(); ++frame)
+            if (included[frame])
+            {
+                remap[frame] = static_cast<unsigned int>(samples.size());
+                samples.push_back({frame, frame, 0.0f});
+            }
+        for (unsigned int index = 0; index < outputAnimations->size(); ++index)
+        {
+            PreviewAnimationRange & animation = (*outputAnimations)[index];
+            animation.startFrame = remap[animation.startFrame];
+            animation.endFrame = remap[animation.endFrame];
+            animation.frameDelta = animation.storedDelta;
+        }
+    }
+    else
+    {
+        for (unsigned int orderedIndex = 0; orderedIndex < ordered.size(); ++orderedIndex)
+        {
+            const unsigned int animationIndex = ordered[orderedIndex];
+            const PreviewAnimationRange & animation = addedAnimations[animationIndex];
+            mappedStarts[animationIndex] = static_cast<unsigned int>(samples.size());
+            if (!appendAnimationFrameSamples(animation.startFrame, animation.endFrame,
+                                             animation.storedDelta, animation.frameDelta,
+                                             &samples))
+            {
+                *error = "Resampling exceeds the ZTP animation frame limit.";
+                return false;
+            }
+            mappedEnds[animationIndex] = static_cast<unsigned int>(samples.size() - 1);
+            (*outputAnimations)[animationIndex].frameDelta = animation.frameDelta;
+            (*outputAnimations)[animationIndex].storedDelta = animation.frameDelta;
+            if (samples.size() > ZTP_MAX_ANIMATION_FRAMES)
+            {
+                *error = "Resampling exceeds the ZTP animation frame limit.";
+                return false;
+            }
+        }
+        for (unsigned int index = 0; index < outputAnimations->size(); ++index)
+        {
+            (*outputAnimations)[index].startFrame = mappedStarts[index];
+            (*outputAnimations)[index].endFrame = mappedEnds[index];
+        }
+    }
+    if (samples.size() > ZTP_MAX_ANIMATION_FRAMES ||
+        samples.size() == 0)
+    {
+        *error = "Animation export contains no frames or exceeds the ZTP frame limit.";
+        return false;
+    }
+
+    bool changed = samples.size() != source->nbFrames;
+    for (unsigned int frame = 0; !changed && frame < samples.size(); ++frame)
+        changed = samples[frame].firstFrame != frame || samples[frame].secondFrame != frame ||
+            samples[frame].fraction != 0.0f;
+    if (!changed)
+    {
+        output->nbFrames = static_cast<unsigned int>(samples.size());
+        if (samples.size() != source->nbFrames)
+        {
+            frameDescriptors->resize(samples.size());
+            for (unsigned int frame = 0; frame < samples.size(); ++frame)
+                (*frameDescriptors)[frame] = source->keyFrames[samples[frame].firstFrame];
+            output->keyFrames = frameDescriptors->data();
+        }
+        return true;
+    }
+
+    uint64_t totalPointCount = 0;
+    for (unsigned int mesh = 0; mesh < source->nbModels; ++mesh)
+        totalPointCount += source->model[mesh].nbPoint;
+    if (totalPointCount * samples.size() > 4u * 1024u * 1024u)
+    {
+        *error = "Resampled animation exceeds the ZTP point-frame limit.";
+        return false;
+    }
+
+    sampledFrames->resize(samples.size());
+    frameDescriptors->resize(samples.size());
+    for (unsigned int frame = 0; frame < samples.size(); ++frame)
+    {
+        std::vector<vertex_t> & vertices = (*sampledFrames)[frame];
+        vertices.resize(static_cast<size_t>(totalPointCount));
+        unsigned int pointOffset = 0;
+        for (unsigned int mesh = 0; mesh < source->nbModels; ++mesh)
+        {
+            for (unsigned int point = 0; point < source->model[mesh].nbPoint; ++point)
+            {
+                const vertex_t & first = source->keyFrames[samples[frame].firstFrame].cVert[pointOffset + point];
+                const vertex_t & second = source->keyFrames[samples[frame].secondFrame].cVert[pointOffset + point];
+                vertex_t & destination = vertices[pointOffset + point];
+                destination = first;
+                for (unsigned int axis = 0; axis < XYZ; ++axis)
+                    destination.point[axis] = first.point[axis] +
+                        (second.point[axis] - first.point[axis]) * samples[frame].fraction;
+            }
+            pointOffset += source->model[mesh].nbPoint;
+        }
+        (*frameDescriptors)[frame].cVert = vertices.data();
+    }
+    output->nbFrames = static_cast<unsigned int>(samples.size());
+    output->keyFrames = frameDescriptors->data();
     return true;
 }
 
@@ -689,7 +1528,26 @@ bool saveCurrentZTP(HWND owner, bool saveAs)
                     "Protected reference", MB_OK | MB_ICONWARNING);
         return false;
     }
-    animated_model_t modelToSave = *currentModel;
+    const bool exportReducedCopy = experimentalAnimationResampling && !addedAnimations.empty();
+    if (exportReducedCopy && _stricmp(absoluteModelPath(destination).c_str(),
+                                      absoluteModelPath(ztpSavePath).c_str()) == 0)
+    {
+        MessageBoxA(owner, "Experimental keyframe resampling writes a separate copy so the original remains reversible. Choose Save as and a different filename.",
+                    "Choose a new ZTP filename", MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    animated_model_t modelToSave = {};
+    std::vector<std::vector<vertex_t> > sampledFrames;
+    std::vector<key_frame_t> frameDescriptors;
+    std::vector<PreviewAnimationRange> outputAnimations;
+    string exportError;
+    if (!buildAnimationExport(currentModel, &modelToSave, &sampledFrames,
+                              &frameDescriptors, &outputAnimations, exportReducedCopy,
+                              exportReducedCopy, &exportError))
+    {
+        MessageBoxA(owner, exportError.c_str(), "Animation export failed", MB_OK | MB_ICONWARNING);
+        return false;
+    }
     std::vector<model_t> meshes(currentModel->model, currentModel->model + currentModel->nbModels);
     for (unsigned int mesh = 0; mesh < meshes.size(); ++mesh)
         meshes[mesh].pntbl = ztpBasePose[mesh].data();
@@ -700,11 +1558,21 @@ bool saveCurrentZTP(HWND owner, bool saveAs)
                     "Save failed", MB_OK | MB_ICONERROR);
         return false;
     }
+    if (!writeAnimationSidecar(destination + ".animations.txt", outputAnimations))
+        MessageBoxA(owner, "The ZTP file was saved, but its animation companion sidecar could not be written. Reduced animations require this metadata.",
+                    "Animation metadata save failed", MB_OK | MB_ICONERROR);
+    if (exportReducedCopy)
+    {
+        MessageBoxA(owner, "A resampled ZTP copy was saved with remapped animation metadata. The original file and the current in-memory animation remain unchanged.",
+                    "Reduced ZTP copy saved", MB_OK | MB_ICONINFORMATION);
+        return true;
+    }
     ztpSavePath = destination;
     currentFolder = destination;
     currentFile = destination.substr(destination.find_last_of("\\/") + 1);
     fileOutName = currentFile.substr(0, currentFile.find_last_of('.'));
     ztpSaved = true;
+    ztpBaseReplaced = false;
     savedEditRevision = surfaceEditRevision();
     savedLodRevision = currentModel->lodData ? currentModel->lodData->revision : 0;
     SetWindowTextA(owner, ("ZTP Converter - " + currentFile).c_str());
@@ -712,15 +1580,144 @@ bool saveCurrentZTP(HWND owner, bool saveAs)
     return true;
 }
 
+bool saveConvertedModel(HWND owner, bool saveAs)
+{
+    if (!currentModel || currentModelIsZTP) return false;
+    string destination = convertedModelSavePath;
+    if (destination.empty())
+    {
+        CreateDirectoryA("OUT", NULL);
+        destination = "OUT\\" + (fileOutName.empty() ? string("model") : fileOutName) + ".ZTP";
+    }
+    if (saveAs)
+    {
+        char filePath[MAX_PATH] = {};
+        std::strncpy(filePath, destination.c_str(), sizeof(filePath) - 1);
+        OPENFILENAMEA dialog = {};
+        dialog.lStructSize = sizeof(dialog);
+        dialog.hwndOwner = owner;
+        dialog.lpstrTitle = "Save ZTP as";
+        dialog.lpstrFilter = "ZTP files (*.ztp)\0*.ztp\0\0";
+        dialog.lpstrFile = filePath;
+        dialog.nMaxFile = MAX_PATH;
+        dialog.lpstrDefExt = "ZTP";
+        dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        if (!GetSaveFileNameA(&dialog)) return false;
+        destination = filePath;
+    }
+    const size_t extension = destination.find_last_of('.');
+    const size_t separator = destination.find_last_of("\\/");
+    const bool hasFileExtension = extension != string::npos &&
+        (separator == string::npos || extension > separator);
+    if (!hasFileExtension)
+        destination += ".ZTP";
+    else if (_stricmp(destination.substr(extension).c_str(), ".ztp") != 0)
+        destination = destination.substr(0, extension) + ".ZTP";
+    destination = absoluteModelPath(destination);
+    if (isProtectedReferencePath(destination) ||
+        _stricmp(destination.c_str(), absoluteModelPath(currentFolder + currentFile).c_str()) == 0)
+    {
+        MessageBoxA(owner, "The ZTP output cannot overwrite the source model or a protected reference. Choose another filename.",
+                    "Protected output path", MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    if (USE_SGL == 2)
+    {
+        MessageBoxA(owner, "Palette export mode does not produce a ZTP file. Choose Disabled or Enabled in converter options.",
+                    "ZTP export unavailable", MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    if (USE_SGL == 0)
+        for (unsigned int mesh = 0; mesh < currentModel->nbModels; ++mesh)
+            if (currentModel->model[mesh].nbPoint > 256)
+            {
+                char error[256];
+                sprintf(error, "Mesh %u has %u points; non-SGL Z01 supports at most 256. Enable SGL or reduce/replace the base mesh before export.",
+                    mesh + 1, currentModel->model[mesh].nbPoint);
+                MessageBoxA(owner, error, "ZTP export failed", MB_OK | MB_ICONWARNING);
+                return false;
+            }
+
+    animated_model_t modelToSave = {};
+    std::vector<std::vector<vertex_t> > sampledFrames;
+    std::vector<key_frame_t> frameDescriptors;
+    std::vector<PreviewAnimationRange> outputAnimations;
+    string exportError;
+    if (!buildAnimationExport(currentModel, &modelToSave, &sampledFrames,
+                              &frameDescriptors, &outputAnimations, true,
+                              experimentalAnimationResampling, &exportError))
+    {
+        MessageBoxA(owner, exportError.c_str(), "Animation export failed", MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    if (!saveZTPFile(destination, &modelToSave))
+    {
+        MessageBoxA(owner, "Could not save the ZTP file. Check the destination and write permissions. The previous file has not been replaced.",
+                    "Save failed", MB_OK | MB_ICONERROR);
+        return false;
+    }
+    if (!writeAnimationSidecar(destination + ".animations.txt", outputAnimations))
+        MessageBoxA(owner, "The ZTP file was saved, but its animation companion sidecar could not be written. Reduced animations require this metadata.",
+                    "Animation metadata save failed", MB_OK | MB_ICONERROR);
+    convertedModelSavePath = destination;
+    return true;
+}
+
 bool confirmZTPSave(HWND owner)
 {
     if (!currentModelIsZTP || !currentModel ||
-        (ztpSaved && savedEditRevision == surfaceEditRevision() &&
+        (ztpSaved && !ztpBaseReplaced && savedEditRevision == surfaceEditRevision() &&
          savedLodRevision == (currentModel->lodData ? currentModel->lodData->revision : 0))) return true;
     int answer = MessageBoxA(owner, "Save the current ZTP file before continuing?",
         "Unsaved ZTP", MB_YESNOCANCEL | MB_ICONQUESTION);
     if (answer == IDCANCEL) return false;
     return answer == IDNO || (answer == IDYES && saveCurrentZTP(owner, false));
+}
+
+bool exportCurrentSkeleton(HWND owner)
+{
+    if (!currentModel || !hasFbxSkeleton(currentModel)) return false;
+    fbxLoadError.clear();
+    string baseName = currentFile;
+    const size_t extension = baseName.find_last_of('.');
+    if (extension != string::npos) baseName.resize(extension);
+    baseName += "_skeleton.c";
+    char filePath[MAX_PATH] = {};
+    std::strncpy(filePath, baseName.c_str(), sizeof(filePath) - 1);
+    OPENFILENAMEA dialog = {};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrTitle = "Export Saturn skeleton as C";
+    dialog.lpstrFilter = "C source files (*.c)\0*.c\0\0";
+    dialog.lpstrFile = filePath;
+    dialog.nMaxFile = MAX_PATH;
+    dialog.lpstrDefExt = "c";
+    dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetSaveFileNameA(&dialog)) return false;
+
+    unsigned int bones = 0;
+    unsigned int nodes = 0;
+    unsigned int frames = 0;
+    unsigned long long dataSize = 0;
+    uint32_t translationScaleQ16_16 = 0;
+    if (!exportFbxSkeletonC(currentModel, filePath, &bones, &nodes, &frames, &dataSize,
+                            &translationScaleQ16_16))
+    {
+        const string error = fbxLoadError.empty() ?
+            "Could not export the skeleton. Check the destination and try again." : fbxLoadError;
+        MessageBoxA(owner, error.c_str(), "Skeleton export failed", MB_OK | MB_ICONERROR);
+        return false;
+    }
+    std::ostringstream summary;
+    summary << "Skeleton exported successfully.\n\nBones: " << bones
+            << "\nHierarchy nodes: " << nodes
+            << "\nAnimation frames: " << frames
+            << "\nTranslation unit scale: "
+            << static_cast<double>(translationScaleQ16_16) / 65536.0 << "x"
+            << "\nSaturn data size: " << dataSize << " bytes\n\n"
+            << absoluteModelPath(filePath);
+    MessageBoxA(owner, summary.str().c_str(), "Skeleton export complete", MB_OK | MB_ICONINFORMATION);
+    return true;
 }
 
 void removeComparison(HWND owner)
@@ -753,13 +1750,20 @@ bool loadComparison(const string & fullPath, const string & folder, const string
         const int savedSgl = USE_SGL;
         const uint32_t savedUv = useUV;
         const uint32_t savedSpecial = specialOption;
+        const uint32_t savedMaxTextureWidth = maxGeneratedTextureWidth;
+        const uint32_t savedMaxTextureHeight = maxGeneratedTextureHeight;
         const uint32_t savedCoordinatesCount = tot_tex_coord;
         const std::vector<uv_t> savedCoordinates(texture_coord, texture_coord + tot_tex_coord);
         nextModel = loadingConfigured(options.frameCount, options.sglMode, options.scale,
-            options.useUv ? 1u : 0u, options.specialOptions, folder, fileName, true);
+            options.useUv ? 1u : 0u, options.specialOptions, folder, fileName, true,
+            options.rotationX, options.rotationY, options.rotationZ,
+            options.translationX, options.translationY, options.translationZ,
+            options.maxTextureWidth, options.maxTextureHeight);
         USE_SGL = savedSgl;
         useUV = savedUv;
         specialOption = savedSpecial;
+        maxGeneratedTextureWidth = savedMaxTextureWidth;
+        maxGeneratedTextureHeight = savedMaxTextureHeight;
         tot_tex_coord = savedCoordinatesCount;
         std::copy(savedCoordinates.begin(), savedCoordinates.end(), texture_coord);
     }
@@ -789,7 +1793,7 @@ void openModelDialog(HWND owner, bool comparison = false)
     dialog.lStructSize = sizeof(dialog);
     dialog.hwndOwner = owner;
     dialog.lpstrTitle = comparison ? "Load visual reference" : "Open working model";
-    dialog.lpstrFilter = "Model files (*.obj;*.ztp)\0*.obj;*.ztp\0Wavefront OBJ files (*.obj)\0*.obj\0ZTP files (*.ztp)\0*.ztp\0All files (*.*)\0*.*\0\0";
+    dialog.lpstrFilter = "Model files (*.obj;*.fbx;*.ztp)\0*.obj;*.fbx;*.ztp\0Wavefront OBJ files (*.obj)\0*.obj\0Autodesk FBX files (*.fbx)\0*.fbx\0ZTP files (*.ztp)\0*.ztp\0All files (*.*)\0*.*\0\0";
     dialog.lpstrFile = filePath;
     dialog.nMaxFile = MAX_PATH;
     dialog.lpstrDefExt = "obj";
@@ -822,14 +1826,21 @@ void openModelDialog(HWND owner, bool comparison = false)
         else loadZTPModel(fullPath, fileName, owner);
         return;
     }
-    if (extensionName != ".obj")
+    if (extensionName != ".obj" && extensionName != ".fbx")
     {
-        MessageBoxA(owner, "Choose an OBJ or ZTP file.", "Unsupported file", MB_OK | MB_ICONWARNING);
+        MessageBoxA(owner, "Choose an OBJ, FBX or ZTP file.", "Unsupported file", MB_OK | MB_ICONWARNING);
         return;
     }
     fileName.resize(extension);
+    if (comparison && extensionName == ".fbx")
+    {
+        MessageBoxA(owner, "FBX visual references are not supported yet.",
+                    "Unsupported reference", MB_OK | MB_ICONWARNING);
+        return;
+    }
     if (comparison) loadComparison(fullPath, folder, fileName, false, owner);
-    else loadModel(folder, fileName, owner);
+    else loadModel(folder, extensionName == ".fbx" ? fileName + ".fbx" : fileName,
+                   owner, extensionName == ".obj");
 }
 
 HMENU createMainMenu()
@@ -839,6 +1850,7 @@ HMENU createMainMenu()
     AppendMenuA(fileMenu, MF_STRING, IDM_FILE_OPEN, "Open model...");
     AppendMenuA(fileMenu, MF_STRING, IDM_COMPARISON_OPEN, "Load visual reference...");
     AppendMenuA(fileMenu, MF_STRING, IDM_COMPARISON_REMOVE, "Remove visual reference");
+    AppendMenuA(fileMenu, MF_STRING | MF_GRAYED, IDM_EXPORT_SKELETON, "Export skeleton (C)...");
     AppendMenuA(fileMenu, MF_SEPARATOR, 0, NULL);
     AppendMenuA(fileMenu, MF_STRING, IDM_FILE_EXIT, "Exit");
     AppendMenuA(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(fileMenu), "File");
@@ -852,6 +1864,10 @@ HMENU createMainMenu()
 void deleteModels(animated_model_t * model)
 {
     if (!model) return;
+    discardFbxBonePreview(model);
+    discardFbxSkeleton(model);
+    discardAutomaticLodBaseSnapshot(model);
+    discardAutomaticLodSourceTextures(model);
     delete model->lodData;
     for (unsigned int i=0; i<model->nbModels; i++) {
         delete [] model->model[i].pltbl;
@@ -956,12 +1972,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         float scale = 1.0f;
         int useUv = 0;
         unsigned int specialOptions = 0;
+        uint32_t maxTextureWidth = 1024;
+        uint32_t maxTextureHeight = 256;
         arguments >> frameCount >> sglMode >> scale >> useUv >> specialOptions;
+        string ignoredArgument;
+        arguments >> ignoredArgument >> ignoredArgument >> ignoredArgument >> maxTextureWidth >> maxTextureHeight;
         loadOptions.frameCount = frameCount;
         loadOptions.sglMode = sglMode;
         loadOptions.scale = scale;
         loadOptions.useUv = useUv != 0;
         loadOptions.specialOptions = specialOptions;
+        loadOptions.maxTextureWidth = maxTextureWidth;
+        loadOptions.maxTextureHeight = maxTextureHeight;
         currentModel = loading(string(lpCmdLine));
         std::istringstream fileArguments(lpCmdLine);
         string ignored;
@@ -975,6 +1997,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     {
         openModelDialog(hwnd);
     }
+    updateFileMenu(hwnd);
 
 /**
     for (uint32_t i=0; i<tot_tex_coord; i++) {
@@ -1009,10 +2032,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             glMatrixMode(GL_MODELVIEW);
             gluLookAt(0.0, 0.0, -0.1, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0);
             extern int myControls(player_t*, animated_model_t*);
-            if (myControls(&PLAYER[0], currentModel) == -1)
+            extern void suspendModelControls(player_t *);
+            const HWND focusedControl = GetFocus();
+            const bool textInputActive = focusedControl == GetDlgItem(hwnd, IDC_ANIMATION_NAME) ||
+                focusedControl == GetDlgItem(hwnd, IDC_ANIMATION_START) ||
+                focusedControl == GetDlgItem(hwnd, IDC_ANIMATION_END) ||
+                focusedControl == GetDlgItem(hwnd, IDC_ANIMATION_LOOP);
+            if (GetForegroundWindow() == hwnd && !textInputActive &&
+                myControls(&PLAYER[0], currentModel) == -1)
             {
                 SendMessageA(hwnd, WM_CLOSE, 0, 0);
             }
+            else if (GetForegroundWindow() != hwnd || textInputActive)
+                suspendModelControls(&PLAYER[0]);
             if (shownSelectionRevision != surfaceSelectionRevision())
                 updateSurfacePanel(hwnd, currentModel);
             UINT wireframeState = (DisplayTEST & 1) ? BST_CHECKED : BST_UNCHECKED;
@@ -1043,24 +2075,89 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     extern string fileOutName;// = "OUT/" + fileIn;
     CreateDirectory("OUT/", NULL);
     cout << "NOW CREATING BINARY FILE " << fileOutName << ".ZTP\n";
-    string binaryFileName = "OUT\\" + fileOutName + ".ZTP";
+    string binaryFileName = convertedModelSavePath.empty() ?
+        "OUT\\" + (fileOutName.empty() ? string("model") : fileOutName) + ".ZTP" :
+        convertedModelSavePath;
     while (isProtectedReferencePath(binaryFileName))
         binaryFileName.insert(binaryFileName.size() - 4, "_working");
     cout << "Binary output: " << binaryFileName << "\n";
 
-    ofstream binFile(binaryFileName.c_str(), ios::out | ios::binary);
-    if (!binFile.is_open()) {cout << "\nERROR WHILE WRITING BINARY FILE!\n";}
-    else {
+    char exportError[256] = {};
+    if (USE_SGL == 2)
+        sprintf(exportError, "Palette export mode does not produce a ZTP file. Choose Disabled or Enabled in converter options.");
+    else if (USE_SGL == 0)
+        for (unsigned int mesh = 0; mesh < currentModel->nbModels; ++mesh)
+            if (currentModel->model[mesh].nbPoint > 256)
+            {
+                sprintf(exportError, "Mesh %u has %u points; non-SGL Z01 supports at most 256. Enable SGL or reduce/replace the base mesh before export.",
+                    mesh + 1, currentModel->model[mesh].nbPoint);
+                break;
+            }
+
+    if (exportError[0])
+    {
+        cout << "\nERROR WHILE WRITING BINARY FILE: " << exportError << "\n";
+        MessageBoxA(hwnd, exportError, "ZTP export failed", MB_OK | MB_ICONERROR);
+    }
+    else
+    {
         extern void write_model_binary(ofstream*file, animated_model_t*aModel, bool preserveLoadedZTP);
         extern bool write_MOD_HEADER(string filename, animated_model_t * aModel);
-
-        write_model_binary(&binFile, currentModel, currentModelIsZTP);
-        cout << "Writing debug text file...\n";
-
-        write_MOD_HEADER("OUT.TXT", currentModel);
-        binFile.close();
         extern int writeShadows(string, animated_model_t*);
-        writeShadows("SHADOWS.PNG", currentModel);
+        char temporaryPath[MAX_PATH] = {};
+        if (!GetTempFileNameA("OUT", "ztp", 0, temporaryPath))
+        {
+            MessageBoxA(hwnd, "Could not create a temporary export file in OUT.",
+                        "ZTP export failed", MB_OK | MB_ICONERROR);
+        }
+        else
+        {
+            ofstream binFile(temporaryPath, ios::out | ios::binary | ios::trunc);
+            bool written = binFile.is_open();
+            std::vector<std::vector<vertex_t> > sampledFrames;
+            std::vector<key_frame_t> exportFrames;
+            std::vector<PreviewAnimationRange> outputAnimations;
+            string animationError;
+            if (!written)
+                cout << "\nERROR WHILE OPENING TEMPORARY BINARY FILE!\n";
+            else
+            {
+                animated_model_t exportModel = {};
+                if (!buildAnimationExport(currentModel, &exportModel, &sampledFrames,
+                                          &exportFrames, &outputAnimations, true,
+                                          experimentalAnimationResampling, &animationError))
+                {
+                    binFile.close();
+                    DeleteFileA(temporaryPath);
+                    MessageBoxA(hwnd, animationError.c_str(), "Animation export failed",
+                                MB_OK | MB_ICONWARNING);
+                    written = false;
+                }
+                else
+                {
+                    write_model_binary(&binFile, &exportModel, currentModelIsZTP);
+                    binFile.close();
+                    written = binFile.good();
+                }
+            }
+            if (written && MoveFileExA(temporaryPath, binaryFileName.c_str(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            {
+                if (!writeAnimationSidecar(binaryFileName + ".animations.txt", outputAnimations))
+                    MessageBoxA(hwnd, "The ZTP file was exported, but its animation companion sidecar could not be written. Reduced animations require this metadata.",
+                                "Animation metadata export failed", MB_OK | MB_ICONERROR);
+                cout << "Writing debug text file...\n";
+                write_MOD_HEADER("OUT.TXT", currentModel);
+                writeShadows("SHADOWS.PNG", currentModel);
+            }
+            else
+            {
+                DeleteFileA(temporaryPath);
+                if (animationError.empty())
+                    MessageBoxA(hwnd, "The ZTP writer rejected the model or could not finish writing. The previous export was preserved.",
+                                "ZTP export failed", MB_OK | MB_ICONERROR);
+            }
+        }
     }
     }
 #endif // 1
@@ -1089,6 +2186,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             createSidePanel(hwnd);
             layoutSidePanel(hwnd);
             updateSurfacePanel(hwnd, NULL);
+            refreshAnimationRangeControls(hwnd, NULL);
+            refreshAddedAnimations(hwnd, 0xFFFFFFFFu);
             return 0;
 
         case WM_SIZE:
@@ -1098,7 +2197,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
         case WM_GETMINMAXINFO:
         {
-            RECT minimum = {0, 0, SIDE_PANEL_WIDTH + 320, 784};
+            RECT minimum = {0, 0, SIDE_PANEL_WIDTH + 320, 900};
             AdjustWindowRectEx(&minimum, WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_OVERLAPPEDWINDOW, TRUE, 0);
             MINMAXINFO * limits = reinterpret_cast<MINMAXINFO *>(lParam);
             limits->ptMinTrackSize.x = minimum.right - minimum.left;
@@ -1124,7 +2223,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             return 0;
 
         case WM_ACTIVATE:
-            if (LOWORD(wParam) == WA_INACTIVE && GetCapture() == hwnd) ReleaseCapture();
+            if (LOWORD(wParam) == WA_INACTIVE)
+            {
+                if (GetCapture() == hwnd) ReleaseCapture();
+                extern void suspendModelControls(player_t *);
+                suspendModelControls(&PLAYER[0]);
+            }
             return DefWindowProc(hwnd, uMsg, wParam, lParam);
 
         case WM_CLOSE:
@@ -1169,6 +2273,39 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             if (HIWORD(wParam) == CBN_SELCHANGE)
             {
                 int controlId = LOWORD(wParam);
+                if (controlId == IDC_ANIMATION_LIST)
+                {
+                    LRESULT selected = SendDlgItemMessageA(hwnd, IDC_ANIMATION_LIST, CB_GETCURSEL, 0, 0);
+                    if (selected >= 0)
+                    {
+                        refreshAddedAnimations(hwnd, static_cast<unsigned int>(selected));
+                        selectAddedAnimation(hwnd);
+                    }
+                    SetFocus(hwnd);
+                    return 0;
+                }
+                if (controlId == IDC_ANIMATION_FRAME_DELTA)
+                {
+                    const LRESULT selected = SendDlgItemMessageA(hwnd, IDC_ANIMATION_LIST, CB_GETCURSEL, 0, 0);
+                    const LRESULT deltaIndex = SendDlgItemMessageA(hwnd, IDC_ANIMATION_FRAME_DELTA, CB_GETCURSEL, 0, 0);
+                    if (selected >= 0 && static_cast<unsigned int>(selected) < addedAnimations.size() &&
+                        deltaIndex >= 0 && deltaIndex < 16)
+                    {
+                        PreviewAnimationRange & range = addedAnimations[static_cast<unsigned int>(selected)];
+                        range.frameDelta = static_cast<unsigned int>(deltaIndex) + 1;
+                        if (range.frameDelta != range.storedDelta)
+                            experimentalAnimationResampling = true;
+                        PLAYER[0].ANIMCTRL.frameDelta = activeAnimationFrameDelta();
+                        PLAYER[0].ANIMCTRL.sourceFrameDelta = activeAnimationStoredDelta();
+                        refreshAddedAnimations(hwnd, static_cast<unsigned int>(selected));
+                        setAnimationPreviewRange(range.startFrame, range.endFrame);
+                        if (!saveAnimationSidecar())
+                            MessageBoxA(hwnd, "Could not save the animation ranges file.",
+                                        "Animation save failed", MB_OK | MB_ICONERROR);
+                    }
+                    SetFocus(hwnd);
+                    return 0;
+                }
                 if (controlId == IDC_LOD_LEVEL)
                 {
                     LRESULT level = SendDlgItemMessageA(hwnd, IDC_LOD_LEVEL, CB_GETCURSEL, 0, 0);
@@ -1192,6 +2329,57 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     return 0;
                 }
             }
+            if (LOWORD(wParam) == IDC_ANIMATION_NAME && HIWORD(wParam) == EN_CHANGE)
+            {
+                commitSelectedAnimationName(hwnd);
+                return 0;
+            }
+            if (LOWORD(wParam) == IDC_ANIMATION_LOOP && HIWORD(wParam) == BN_CLICKED)
+            {
+                const LRESULT selected = SendDlgItemMessageA(hwnd, IDC_ANIMATION_LIST, CB_GETCURSEL, 0, 0);
+                if (selected >= 0 && static_cast<unsigned int>(selected) < addedAnimations.size())
+                {
+                    const bool loop = IsDlgButtonChecked(hwnd, IDC_ANIMATION_LOOP) == BST_CHECKED;
+                    addedAnimations[static_cast<unsigned int>(selected)].loop = loop;
+                    animationLoopPlayback = loop;
+                    if (!saveAnimationSidecar())
+                        MessageBoxA(hwnd, "Could not save the animation ranges file.",
+                                    "Animation save failed", MB_OK | MB_ICONERROR);
+                }
+                return 0;
+            }
+            if (LOWORD(wParam) == IDC_ANIMATION_RESAMPLE && HIWORD(wParam) == BN_CLICKED)
+            {
+                experimentalAnimationResampling =
+                    IsDlgButtonChecked(hwnd, IDC_ANIMATION_RESAMPLE) == BST_CHECKED;
+                PLAYER[0].ANIMCTRL.frameDelta = activeAnimationFrameDelta();
+                PLAYER[0].ANIMCTRL.sourceFrameDelta = activeAnimationStoredDelta();
+                const unsigned int selected = selectedAnimationIndex();
+                if (selected < addedAnimations.size())
+                    setAnimationPreviewRange(addedAnimations[selected].startFrame,
+                                             addedAnimations[selected].endFrame);
+                else if (currentModel && currentModel->nbFrames)
+                    setAnimationPreviewRange(0, maxPreviewFrame(currentModel));
+                return 0;
+            }
+            if (LOWORD(wParam) == IDC_ANIMATION_RANGE_APPLY && HIWORD(wParam) == BN_CLICKED)
+            {
+                applyAnimationRange(hwnd);
+                SetFocus(hwnd);
+                return 0;
+            }
+            if (LOWORD(wParam) == IDC_ANIMATION_ADD && HIWORD(wParam) == BN_CLICKED)
+            {
+                addOrReplaceAnimation(hwnd);
+                SetFocus(hwnd);
+                return 0;
+            }
+            if (LOWORD(wParam) == IDC_ANIMATION_DELETE && HIWORD(wParam) == BN_CLICKED)
+            {
+                deleteSelectedAnimation(hwnd);
+                SetFocus(hwnd);
+                return 0;
+            }
             switch (LOWORD(wParam))
             {
                 case IDM_FILE_OPEN:
@@ -1208,7 +2396,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     return 0;
                 case IDM_OPTIONS:
                     if (currentModelIsZTP) loadZTPModel(currentFolder, currentFile, hwnd);
-                    else if (!currentFile.empty()) loadModel(currentFolder, currentFile, hwnd);
+                    else if (!currentFile.empty()) loadModel(currentFolder, currentFile, hwnd, currentModelIsObj);
                     else showOptionsDialog(hwnd, &loadOptions);
                     return 0;
                 case IDM_FILE_EXIT:
@@ -1216,7 +2404,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     return 0;
                 case IDM_FILE_SAVE:
                 case IDM_FILE_SAVE_AS:
-                    saveCurrentZTP(hwnd, LOWORD(wParam) == IDM_FILE_SAVE_AS);
+                    if (currentModelIsZTP)
+                        saveCurrentZTP(hwnd, LOWORD(wParam) == IDM_FILE_SAVE_AS);
+                    else
+                        saveConvertedModel(hwnd, LOWORD(wParam) == IDM_FILE_SAVE_AS);
+                    SetFocus(hwnd);
+                    return 0;
+                case IDM_EXPORT_SKELETON:
+                    exportCurrentSkeleton(hwnd);
                     SetFocus(hwnd);
                     return 0;
                 case IDC_WIREFRAME:
@@ -1235,26 +2430,60 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                         SetFocus(hwnd);
                     }
                     return 0;
+                case IDC_BONE_PREVIEW:
+                    if (HIWORD(wParam) == BN_CLICKED && currentModel)
+                    {
+                        const bool enabled = IsDlgButtonChecked(hwnd, IDC_BONE_PREVIEW) == BST_CHECKED;
+                        if (!setFbxBonePreview(currentModel, enabled))
+                            CheckDlgButton(hwnd, IDC_BONE_PREVIEW, BST_UNCHECKED);
+                        extern int enableInterpolation;
+                        applyAnimationPose(currentModel, PLAYER[0].ANIMCTRL, true, enableInterpolation != 0);
+                        calcLight(currentModel);
+                        resetSelfShadowing();
+                        SetFocus(hwnd);
+                    }
+                    return 0;
                 case IDC_LOD_GENERATE:
                     if (HIWORD(wParam) == BN_CLICKED && currentModel)
                     {
                         unsigned int reduction = SendDlgItemMessageA(hwnd, IDC_LOD_REDUCTION, TBM_GETPOS, 0, 0);
                         unsigned int replaceLevel = 0;
-                        if (!chooseLodGeneration(hwnd, reduction, &replaceLevel))
+                        bool replaceBase = false, restoreBase = false;
+                        if (!chooseLodGeneration(hwnd, reduction, &replaceLevel, &replaceBase, &restoreBase))
                         {
                             SetFocus(hwnd);
                             return 0;
                         }
                         HCURSOR previousCursor = SetCursor(LoadCursor(NULL, IDC_WAIT));
-                        bool generated = generateAutomaticLod(currentModel, reduction, replaceLevel);
+                        const unsigned int previousTextureCount = currentModel->nbTextures;
+                        bool generated = restoreBase ? restoreAutomaticLodBase(currentModel) :
+                            replaceBase ? replaceAutomaticLodBase(currentModel, reduction) :
+                                          generateAutomaticLod(currentModel, reduction, replaceLevel);
                         SetCursor(previousCursor);
+                        if (generated && (replaceBase || restoreBase))
+                            refreshModelTextures(currentModel, previousTextureCount);
+                        if (replaceBase || restoreBase)
+                        {
+                            ztpBaseReplaced = replaceBase && generated;
+                            if (currentModelIsZTP)
+                            {
+                                ztpBasePose.resize(currentModel->nbModels);
+                                for (unsigned int mesh = 0; mesh < currentModel->nbModels; ++mesh)
+                                {
+                                    const model_t & part = currentModel->model[mesh];
+                                    if (part.nbPoint)
+                                        ztpBasePose[mesh].assign(part.pntbl, part.pntbl + part.nbPoint);
+                                    else ztpBasePose[mesh].clear();
+                                }
+                            }
+                            if (generated) calcLight(currentModel);
+                        }
                         resetSelfShadowing();
                         unsigned int selected = 0;
-                        if (generated && currentModel->lodData)
+                        if (generated && !restoreBase && currentModel->lodData)
                             for (unsigned int level = 0; level < currentModel->lodData->levels.size(); ++level)
                                 if (currentModel->lodData->levels[level].reduction == reduction) selected = level + 1;
                         refreshLodControls(hwnd, selected);
-                        if (!generated) SetDlgItemTextA(hwnd, IDC_LOD_STATUS, "LOD generation failed");
                         clearSelectedSurfaces();
                         SetFocus(hwnd);
                     }
@@ -1275,6 +2504,29 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                             resetSelfShadowing();
                             clearSelectedSurfaces();
                         }
+                        SetFocus(hwnd);
+                    }
+                    return 0;
+                case IDC_LOD_MERGE_QUADS:
+                    if (HIWORD(wParam) == BN_CLICKED && currentModel)
+                    {
+                        HCURSOR previousCursor = SetCursor(LoadCursor(NULL, IDC_WAIT));
+                        const unsigned int previousTextureCount = currentModel->nbTextures;
+                        const bool merged = mergeBaseTrianglesIntoQuads(currentModel);
+                        SetCursor(previousCursor);
+                        if (merged)
+                        {
+                            refreshModelTextures(currentModel, previousTextureCount);
+                            ztpBaseReplaced = currentModelIsZTP;
+                            resetAutomaticLod();
+                            CheckDlgButton(hwnd, IDC_LOD_SHOW, BST_UNCHECKED);
+                            calcLight(currentModel);
+                            resetSelfShadowing();
+                            refreshLodControls(hwnd);
+                            clearSelectedSurfaces();
+                        }
+                        else MessageBoxA(hwnd, "No compatible triangle pairs were found.", "Convert tris to quads",
+                                         MB_OK | MB_ICONINFORMATION);
                         SetFocus(hwnd);
                     }
                     return 0;
@@ -1337,4 +2589,3 @@ void DisableOpenGL (HWND hwnd, HDC hDC, HGLRC hRC)
     wglDeleteContext(hRC);
     ReleaseDC(hwnd, hDC);
 }
-

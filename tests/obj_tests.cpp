@@ -1,5 +1,6 @@
 #include "../SRC/COMMON.H"
 #include <cassert>
+#include <cmath>
 #include <cstdio>
 
 uv_t texture_coord[maxPolygons * 4];
@@ -7,9 +8,16 @@ uint32_t tot_tex_coord = 0;
 uint32_t useUV = 1;
 int USE_SGL = 0;
 uint32_t specialOption = 0;
+uint32_t maxGeneratedTextureWidth = 512;
+uint32_t maxGeneratedTextureHeight = 256;
+string fbxLoadError;
 
 bool load_OBJ_to_mesh(ifstream *file, float *scalefactor, animated_model_t *aModel, int keyFrameID);
 animated_model_t * loadingConfigured(unsigned int, int, float, uint32_t, uint32_t, string, string, bool);
+bool loadFBX(const string &, float *, animated_model_t *, int, int, int, float, float, float) { return false; }
+void rotateModelData(animated_model_t *, int, int, int);
+void translateModelData(animated_model_t *, float, float, float);
+void findScale(animated_model_t *, bool);
 extern string fileOutName;
 unsigned int paletteWrites = 0;
 
@@ -23,6 +31,7 @@ void createTexture(polygon_t *, animated_model_t *, const texture_t &) {}
 void writePalette(animated_model_t *) { ++paletteWrites; }
 void calculateBoundingBox(float *, float *, vertex_t *, unsigned int) {}
 void calcLight(animated_model_t *) {}
+void cacheAutomaticLodSourceTextures(animated_model_t *, const texture_t *, unsigned int) {}
 
 static animated_model_t *loadOBJ(const string &path, bool &loaded)
 {
@@ -71,6 +80,71 @@ static double triangleArea(const model_t &mesh, const polygon_t &polygon)
 
 int main()
 {
+    const int previousSgl = USE_SGL;
+    USE_SGL = 0;
+    vertex_t basePoints[2] = {};
+    basePoints[0].point[X] = 2.0f;
+    basePoints[1].point[X] = 4.0f;
+    vertex_t animatedPoints[2] = {};
+    animatedPoints[0].point[X] = 5.0f;
+    animatedPoints[1].point[X] = 40.0f;
+    animatedPoints[1].point[Y] = 20.0f;
+    model_t scaleMeshes[2] = {};
+    scaleMeshes[0].nbPoint = 1;
+    scaleMeshes[0].pntbl = &basePoints[0];
+    scaleMeshes[1].nbPoint = 1;
+    scaleMeshes[1].pntbl = &basePoints[1];
+    key_frame_t scaleFrame = {};
+    scaleFrame.cVert = animatedPoints;
+    animated_model_t scaleModel = {};
+    scaleModel.nbModels = 2;
+    scaleModel.model = scaleMeshes;
+    scaleModel.nbFrames = 1;
+    scaleModel.keyFrames = &scaleFrame;
+    findScale(&scaleModel, false);
+    assert(scaleModel.scale[X] == 1.0f && animatedPoints[1].point[X] == 40.0f);
+    findScale(&scaleModel, true);
+    assert(std::fabs(scaleModel.scale[X] - 40.0f / 126.5f) < 0.000001f);
+    assert(std::fabs(scaleModel.scale[Y] - 20.0f / 126.5f) < 0.000001f);
+    assert(std::fabs(animatedPoints[1].point[X] - 126.5f) < 0.001f);
+    assert(std::fabs(animatedPoints[1].point[Y] - 126.5f) < 0.001f);
+    assert(std::fabs(basePoints[1].point[X] - 4.0f / scaleModel.scale[X]) < 0.001f);
+    USE_SGL = previousSgl;
+
+    vertex_t basePoint = {};
+    basePoint.point[X] = 1;
+    basePoint.point[Y] = 2;
+    basePoint.point[Z] = 3;
+    basePoint.normal[Y] = 1;
+    vertex_t animationPoint = basePoint;
+    polygon_t face = {};
+    face.normal[Y] = 1;
+    model_t mesh = {};
+    mesh.nbPoint = 1;
+    mesh.nbPolygon = 1;
+    mesh.pntbl = &basePoint;
+    mesh.pltbl = &face;
+    key_frame_t frame = {};
+    frame.cVert = &animationPoint;
+    animated_model_t rotated = {};
+    rotated.nbModels = 1;
+    rotated.nbFrames = 1;
+    rotated.model = &mesh;
+    rotated.keyFrames = &frame;
+    rotateModelData(&rotated, 1, 1, 1);
+    assert(basePoint.point[X] == 3 && basePoint.point[Y] == 2 && basePoint.point[Z] == -1);
+    assert(animationPoint.point[X] == 3 && animationPoint.point[Y] == 2 && animationPoint.point[Z] == -1);
+    assert(basePoint.normal[X] == 0 && basePoint.normal[Y] == 1 && basePoint.normal[Z] == 0);
+    assert(animationPoint.normal[X] == 0 && animationPoint.normal[Y] == 1 && animationPoint.normal[Z] == 0);
+    assert(face.normal[X] == 0 && face.normal[Y] == 1 && face.normal[Z] == 0);
+    translateModelData(&rotated, 10, -2, 3);
+    assert(basePoint.point[X] == 13 && basePoint.point[Y] == 0 && basePoint.point[Z] == 2);
+    assert(animationPoint.point[X] == 13 && animationPoint.point[Y] == 0 && animationPoint.point[Z] == 2);
+    assert(mesh.BoxMin[X] == 13 && mesh.BoxMin[Y] == 0 && mesh.BoxMin[Z] == 2);
+    assert(mesh.BoxMax[X] == 13 && mesh.BoxMax[Y] == 0 && mesh.BoxMax[Z] == 2);
+    assert(rotated.BoxMin[X] == 13 && rotated.BoxMin[Y] == 0 && rotated.BoxMin[Z] == 2);
+    assert(rotated.BoxMax[X] == 13 && rotated.BoxMax[Y] == 0 && rotated.BoxMax[Z] == 2);
+
     bool loaded = false;
     animated_model_t *brute = loadOBJ("tests/Brute1.obj", loaded);
     assert(loaded);
@@ -93,8 +167,9 @@ int main()
     assert(fileOutName == "working-model");
     assert(paletteWrites == 0);
     destroyModel(reference);
-    reference = loadingConfigured(0, 0, 1.0f, 0, 0, "tests/", "missing-reference-file", true);
+    reference = loadingConfigured(1025, 0, 1.0f, 0, 0, "tests/", "missing-reference-file", true);
     assert(reference->nbModels == 0);
+    assert(reference->nbFrames == ZTP_MAX_ANIMATION_FRAMES);
     assert(fileOutName == "working-model");
     destroyModel(reference);
     USE_SGL = 0;

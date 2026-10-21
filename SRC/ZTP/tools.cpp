@@ -1,30 +1,89 @@
 #include "../COMMON.H"
 
+bool appendAnimationFrameSamples(unsigned int startFrame, unsigned int endFrame,
+                                 unsigned int sourceDelta, unsigned int targetDelta,
+                                 std::vector<animationFrameSample_t> * samples)
+{
+    if (!samples || startFrame > endFrame || sourceDelta < 1 || sourceDelta > 60 ||
+        targetDelta < 1 || targetDelta > 60)
+        return false;
+    const uint64_t durationTicks = uint64_t(endFrame - startFrame) * sourceDelta;
+    const uint64_t sampleCount = (durationTicks + targetDelta - 1) / targetDelta + 1;
+    if (sampleCount > ZTP_MAX_ANIMATION_FRAMES) return false;
+    for (uint64_t tick = 0;; tick += targetDelta)
+    {
+        if (tick >= durationTicks)
+        {
+            samples->push_back({endFrame, endFrame, 0.0f});
+            break;
+        }
+        const unsigned int wholeFrames = static_cast<unsigned int>(tick / sourceDelta);
+        const unsigned int remainder = static_cast<unsigned int>(tick % sourceDelta);
+        const unsigned int first = startFrame + wholeFrames;
+        samples->push_back({first, MIN(first + 1, endFrame),
+            static_cast<float>(remainder) / sourceDelta});
+    }
+    return true;
+}
+
 bool applyAnimationPose(animated_model_t * model, const animationControl_t & control, bool clamp, bool interpolate)
 {
     if (!model || !model->keyFrames || !model->nbFrames) return false;
-    const unsigned int frameUnit = 1u << MIN(control.fps, 10);
-    unsigned int frame = control.currentFrm / frameUnit;
-    float fraction = static_cast<float>(control.currentFrm % frameUnit) / frameUnit;
-    if (frame >= model->nbFrames)
+    const unsigned int sourceFrameDelta = MAX(1u, MIN(static_cast<unsigned int>(control.sourceFrameDelta), 60u));
+    const unsigned int frameDelta = MAX(1u, MIN(static_cast<unsigned int>(control.frameDelta), 60u));
+    unsigned int rangeEnd = MIN(control.endFrm, model->nbFrames);
+    if (!rangeEnd) rangeEnd = model->nbFrames;
+    const unsigned int startFrame = MIN(static_cast<unsigned int>(control.startFrm), rangeEnd - 1);
+    const unsigned int endFrame = MAX(startFrame, rangeEnd - 1);
+    const unsigned int durationTicks = (endFrame - startFrame) * sourceFrameDelta;
+    const unsigned int sampleCount = (durationTicks + frameDelta - 1) / frameDelta + 1;
+    const unsigned int rangeStart = startFrame * sourceFrameDelta;
+    const unsigned int elapsed = control.currentFrm >= rangeStart ? control.currentFrm - rangeStart : 0;
+    unsigned int outputFrame = elapsed / frameDelta;
+    float fraction = static_cast<float>(elapsed % frameDelta) / frameDelta;
+    if (outputFrame >= sampleCount)
     {
-        frame = model->nbFrames - 1;
+        outputFrame = sampleCount - 1;
         fraction = 0.0f;
     }
-    unsigned int next = frame + 1;
-    if (clamp) next = MIN(next, model->nbFrames - 1);
-    else if (next >= MIN(control.endFrm, model->nbFrames)) next = control.startFrm;
-    if (next >= model->nbFrames) next = frame;
-    const vertex_t * first = model->keyFrames[frame].cVert;
-    const vertex_t * second = model->keyFrames[next].cVert;
-    if (!first || !second) return false;
+    unsigned int nextOutputFrame = outputFrame + 1;
+    if (nextOutputFrame >= sampleCount)
+        nextOutputFrame = clamp ? outputFrame : 0;
+    const unsigned int leftTick = MIN(outputFrame * frameDelta, durationTicks);
+    const unsigned int rightTick = nextOutputFrame == 0 ? 0 :
+        MIN(nextOutputFrame * frameDelta, durationTicks);
+    const float firstSourcePosition = startFrame +
+        static_cast<float>(leftTick) / sourceFrameDelta;
+    const float secondSourcePosition = nextOutputFrame == 0 ? static_cast<float>(startFrame) :
+        startFrame + static_cast<float>(rightTick) / sourceFrameDelta;
+    const unsigned int boneFrame = static_cast<unsigned int>(firstSourcePosition);
+    const unsigned int boneNext = MIN(boneFrame + 1, endFrame);
+    const float boneFraction = firstSourcePosition - boneFrame;
+    if (applyFbxBonePreviewPose(model, boneFrame, boneNext, boneFraction, interpolate)) return true;
+    for (unsigned int frame = startFrame; frame <= endFrame; ++frame)
+        if (!model->keyFrames[frame].cVert) return false;
     if (!interpolate) fraction = 0.0f;
+    const auto samplePoint = [model, startFrame, endFrame](unsigned int offset, unsigned int axis,
+                                                          float sourcePosition)
+    {
+        sourcePosition = MAX(static_cast<float>(startFrame),
+            MIN(sourcePosition, static_cast<float>(endFrame)));
+        const unsigned int firstFrame = static_cast<unsigned int>(sourcePosition);
+        const unsigned int secondFrame = MIN(firstFrame + 1, endFrame);
+        const float amount = sourcePosition - firstFrame;
+        const float first = model->keyFrames[firstFrame].cVert[offset].point[axis];
+        const float second = model->keyFrames[secondFrame].cVert[offset].point[axis];
+        return first + (second - first) * amount;
+    };
     unsigned int offset = 0;
     for (unsigned int mesh = 0; mesh < model->nbModels; ++mesh)
         for (unsigned int point = 0; point < model->model[mesh].nbPoint; ++point, ++offset)
             for (unsigned int axis = 0; axis < XYZ; ++axis)
-                model->model[mesh].pntbl[point].point[axis] = first[offset].point[axis] +
-                    (second[offset].point[axis] - first[offset].point[axis]) * fraction;
+            {
+                const float first = samplePoint(offset, axis, firstSourcePosition);
+                const float second = samplePoint(offset, axis, secondSourcePosition);
+                model->model[mesh].pntbl[point].point[axis] = first + (second - first) * fraction;
+            }
     return true;
 }
 

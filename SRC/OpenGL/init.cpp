@@ -131,3 +131,12 @@ void setTextures(animated_model_t * aModel)
     generateMousePickupTexture();
     generateASCIIbitmap();
 }
+
+void refreshModelTextures(animated_model_t * aModel, unsigned int previousTextureCount)
+{
+    if (!aModel) return;
+    const unsigned int textureCount = MAX(previousTextureCount, aModel->nbTextures);
+    glDeleteTextures(textureCount, texId);
+    for (unsigned int index = 0; index < textureCount; ++index) texId[index] = 0;
+    setModelTextures(aModel, texId);
+}

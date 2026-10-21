@@ -7,9 +7,42 @@
 void calculateBoundingBox(float * boxMin, float * boxMax, vertex_t * vertexArray, unsigned int totalVertices);
 extern bool enableSelfShadowing;
 float lightDir[3] = {};
+bool applyFbxBonePreviewPose(animated_model_t *, unsigned int, unsigned int, float, bool) { return false; }
 
 int main()
 {
+    std::vector<animationFrameSample_t> frameSamples;
+    assert(appendAnimationFrameSamples(0, 60, 4, 4, &frameSamples));
+    assert(frameSamples.size() == 61);
+    assert(frameSamples.front().firstFrame == 0 && frameSamples.back().firstFrame == 60);
+    for (unsigned int frame = 0; frame < frameSamples.size(); ++frame)
+        assert(frameSamples[frame].firstFrame == frame &&
+               frameSamples[frame].secondFrame == MIN(frame + 1, 60u) &&
+               frameSamples[frame].fraction == 0.0f);
+    frameSamples.clear();
+    assert(appendAnimationFrameSamples(0, 60, 4, 2, &frameSamples));
+    assert(frameSamples.size() == 121);
+    assert(frameSamples[1].firstFrame == 0 && frameSamples[1].secondFrame == 1);
+    assert(std::fabs(frameSamples[1].fraction - 0.5f) < 0.001f);
+    assert(frameSamples.back().firstFrame == 60);
+    frameSamples.clear();
+    assert(appendAnimationFrameSamples(0, 60, 4, 8, &frameSamples));
+    assert(frameSamples.size() == 31);
+    assert(frameSamples[1].firstFrame == 2 && frameSamples[1].fraction == 0.0f);
+    assert(frameSamples.back().firstFrame == 60);
+    frameSamples.clear();
+    assert(appendAnimationFrameSamples(0, 565, 4, 8, &frameSamples));
+    assert(frameSamples.size() == 284);
+    assert(frameSamples.front().firstFrame == 0 && frameSamples.back().firstFrame == 565);
+    frameSamples.clear();
+    assert(appendAnimationFrameSamples(5, 19, 4, 16, &frameSamples));
+    const size_t secondRangeStart = frameSamples.size();
+    assert(appendAnimationFrameSamples(20, 26, 4, 16, &frameSamples));
+    assert(secondRangeStart == 5 && frameSamples.size() == 8);
+    assert(frameSamples.front().firstFrame == 5 && frameSamples.back().firstFrame == 26);
+    frameSamples.clear();
+    assert(!appendAnimationFrameSamples(10, 9, 4, 8, &frameSamples));
+
     vertex_t animatedPoints[2] = {};
     animatedPoints[1].point[X] = 10;
     key_frame_t frames[2] = {};
@@ -25,7 +58,8 @@ int main()
     animated.nbFrames = 2;
     animated.keyFrames = frames;
     animationControl_t control = {};
-    control.fps = 2;
+    control.frameDelta = 4;
+    control.sourceFrameDelta = 4;
     control.endFrm = 2;
     control.currentFrm = 2;
     assert(applyAnimationPose(&animated, control, true));
@@ -41,6 +75,40 @@ int main()
     control.currentFrm = 2;
     assert(applyAnimationPose(&animated, control, true, false));
     assert(displayedPoint.point[X] == 0);
+    control.frameDelta = 3;
+    control.sourceFrameDelta = 3;
+    control.currentFrm = 1;
+    assert(applyAnimationPose(&animated, control, true));
+    assert(std::fabs(displayedPoint.point[X] - (10.0f / 3.0f)) < 0.001f);
+    control.currentFrm = 3;
+    assert(applyAnimationPose(&animated, control, true));
+    assert(displayedPoint.point[X] == 10);
+
+    control.frameDelta = 2;
+    control.sourceFrameDelta = 4;
+    control.currentFrm = 2;
+    assert(applyAnimationPose(&animated, control, true));
+    assert(displayedPoint.point[X] == 5);
+    control.frameDelta = 8;
+    control.currentFrm = 4;
+    assert(applyAnimationPose(&animated, control, true));
+    assert(displayedPoint.point[X] == 5);
+
+    control.frameDelta = 4;
+    control.sourceFrameDelta = 4;
+    vertex_t clipPoints[3] = {};
+    clipPoints[1].point[X] = 10;
+    clipPoints[2].point[X] = 20;
+    key_frame_t clipFrames[3] = {};
+    for (unsigned int frame = 0; frame < 3; ++frame)
+        clipFrames[frame].cVert = &clipPoints[frame];
+    animated.nbFrames = 3;
+    animated.keyFrames = clipFrames;
+    control.endFrm = 2;
+    control.currentFrm = 6;
+    assert(applyAnimationPose(&animated, control, true));
+    assert(displayedPoint.point[X] == 10);
+
     animated.nbFrames = 1;
     assert(applyAnimationPose(&animated, control, true));
     assert(displayedPoint.point[X] == 0);

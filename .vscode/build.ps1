@@ -21,7 +21,7 @@ try {
     [xml]$project = Get-Content $projectPath
     $sources = @(
         $project.SelectNodes('/CodeBlocks_project_file/Project/Unit') |
-            Where-Object { $_.filename -like '*.cpp' } |
+            Where-Object { $_.filename -like '*.cpp' -or $_.filename -like '*.c' } |
             ForEach-Object { $_.filename }
     )
     if ($sources.Count -eq 0) {
@@ -50,7 +50,7 @@ try {
     $objectFiles = @()
 
     foreach ($source in $sources) {
-        $objectName = ($source -replace '[\\/]', '_') -replace '\.cpp$', '.o'
+        $objectName = ($source -replace '[\\/]', '_') -replace '\.(cpp|c)$', '.o'
         $objectPath = Join-Path $objectRoot $objectName
         $dependencyPath = [System.IO.Path]::ChangeExtension($objectPath, '.d')
         $needsCompile = $forceCompile -or !(Test-Path $objectPath) -or !(Test-Path $dependencyPath)

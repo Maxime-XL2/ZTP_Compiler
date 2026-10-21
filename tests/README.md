@@ -1,5 +1,74 @@
 # Tests
 
+## FBX vertex animation
+
+The FBX importer samples the longest-duration animation stack at the source
+frame rate, deriving the frame count from the clip duration. Mesh topology must
+remain fixed across those samples.
+Triangles and quads are preserved; larger polygons are triangulated. UVs are
+retained on face corners, and diffuse material colors and external PNG/TGA
+textures are passed through the existing texture pipeline. Embedded textures
+and advanced FBX shader features are not imported.
+
+Skinned FBX imports include an opt-in `1-bone preview` control. Each vertex is
+previewed using its strongest skin-cluster influence, so joint transitions are
+rigid and may differ from the fully weighted sampled animation. This only changes
+the in-memory viewport pose; exported ZTP keyframes remain the sampled animation.
+Start/End values outside the loaded frame range are clamped to its nearest
+endpoint when applied.
+
+Animation sidecars support per-range frame deltas in 60 Hz ticks (`delta 4` =
+15 fps, `delta 8` = 7.5 fps). The experimental resampling checkbox starts
+unchecked for the source cadence; selecting a delta different from the stored
+source delta checks it automatically. It can be unchecked to keep the original
+keyframe cadence. When enabled, preview simulates the chosen sampling cadence
+and ZTP export resamples only the selected ranges, concatenates them without
+exporting frames outside those ranges, then writes their remapped indices and
+deltas to the companion `.animations.txt` file. Higher-rate choices
+generate interpolated positions; lower-rate choices always reduce the stored
+keyframes to the chosen cadence, regardless of interpolation error. The range
+endpoints are retained, so counts scale approximately with the cadence ratio
+(with a small endpoint-rounding difference). Experimental export rejects
+overlapping ranges. For an already loaded ZTP, reduced export requires Save as
+to a different path so the source remains untouched. The ZTP binary still has
+only a global framerate field: a Saturn reader must load the companion sidecar
+to use per-animation ranges and deltas.
+
+File > Export skeleton (C) exports a selected FBX skeleton to a separate,
+standalone C source file; it does not change ZTP. The generated array contains
+unique skin bones plus any ancestors needed to preserve the hierarchy. Parent
+indices use `uint16_t` (`0xFFFF` means root). Rest and animation transforms are
+stored in tightly packed channels. Each animation pose is a 6-byte record with
+three signed `int8_t` Euler angles and three signed `int8_t` integer positions.
+Angles use 256 steps per turn in XYZ order. Positions are rounded to whole
+model units; if needed, one global Q16.16 translation-unit scale is selected
+so they fit the signed 8-bit range. The generated C defines this decoder scale,
+and the completion dialog reports it. Scale is stored once per node in signed
+Q2.6 `int8_t` values; export rejects scale animation that differs from the
+rest scale, along with shear and invalid transforms. Hierarchy metadata is an
+8-byte record with 4-byte alignment; byte channels require no per-sample
+padding. The export currently does not include per-point bone assignments.
+The completion dialog reports the bone count, hierarchy node count, animation
+frame count, selected translation scale and static data footprint (hierarchy
+records, rest channels, animation poses and UTF-8 name bytes), not the
+generated source-text size.
+
+Run the focused importer test from the workspace root in PowerShell:
+
+```powershell
+& 'C:\Program Files\CodeBlocks\MinGW\bin\gcc.exe' -c third_party/ufbx/ufbx.c -o obj/Debug/ufbx_tests.o
+if ($LASTEXITCODE -eq 0) { & 'C:\Program Files\CodeBlocks\MinGW\bin\g++.exe' -std=gnu++14 -Wall -static -ffunction-sections -fdata-sections tests/fbx_tests.cpp SRC/ZTP/fbx.cpp SRC/ZTP/lod.cpp third_party/meshoptimizer/simplifier.cpp obj/Debug/ufbx_tests.o '-Wl,--gc-sections' -o obj/Debug/fbx_tests.exe }
+if ($LASTEXITCODE -eq 0) { & .\obj\Debug\fbx_tests.exe .\tests\fixtures\animated_triangle.fbx --expect-motion }
+```
+
+The fixture checks triangulated indices and verifies that sampled animation
+changes vertex positions. To check the dominant-bone preview against a skinned
+FBX, pass its path and `--preview-bones`; the test checks motion, interpolation,
+reduced-base remapping, restoration and unchanged export keyframes.
+To verify skeleton export against a skinned FBX, pass
+`--export-skeleton "obj\\Debug\\test_skeleton.c"`; the test checks the generated
+C source shape, animation frame count and reported static-data footprint.
+
 ## Wavefront OBJ loading
 
 The OBJ loader supports vertices declared before groups, global and relative
@@ -17,6 +86,8 @@ if ($LASTEXITCODE -eq 0) { & .\obj\Debug\obj_tests.exe }
 The tests load `Brute1.obj` and cover pre-group vertices, grouped global index
 remapping for base meshes and keyframes, relative face indices, omitted texture
 coordinates, normals, concave pentagons and quads, and rejection of index zero.
+OBJ coordinate fitting also checks animated points across all meshes and
+upscales sub-126.5-unit geometry while keeping the model's scale factor inverse.
 
 ## ZTP loading
 
@@ -24,8 +95,10 @@ The ZTP reader supports identified `ZTP_Z01` / `ZTP_S01` containers and legacy
 unidentified non-SGL/SGL payloads, including textures, animations and multi-LOD
 directories. Every export/save writes the modern identified format.
 Exact offsets and engine migration rules are in [ZTP_FORMAT.md](ZTP_FORMAT.md).
-Working models opened as ZTP expose File > Save and Save as. Save writes to
+Loaded models expose File > Save and Save as. For ZTP inputs, Save writes to
 the loaded file; Save as chooses a destination and makes it the next Save target.
+For FBX/OBJ inputs, Save exports a ZTP to `OUT/` by default, while Save as picks
+the output path; subsequent saves and the existing exit export reuse that path.
 Neither command adds a `_TEST` suffix. ZTP models are no longer exported
 automatically on exit. Closing, replacing or reloading a ZTP prompts Yes/No/Cancel
 until the first successful save, and again after surface edits or LOD generation.
@@ -36,13 +109,15 @@ Writes use a temporary file in the destination directory and replace the target
 only after successful writing. Files loaded as references cannot be overwritten.
 The writer preserves the loaded Z/S mode, polygon colors and normals instead of
 rebuilding them from shared textures or animated geometry. Compressed normal
-indices are retained for the base mesh and every animation frame.
+indices are retained for the base mesh and every animation frame. Unused source
+textures are omitted from the saved file, while the current base and all LODs
+are retained.
 OBJ imports retain their existing `OUT/` export directory.
 
 Run the focused reader/writer tests from the workspace root in PowerShell:
 
 ```powershell
-& 'C:\Program Files\CodeBlocks\MinGW\bin\g++.exe' -std=gnu++14 -Wall -static -ffunction-sections -fdata-sections tests/ztp_tests.cpp SRC/ZTP/load.cpp SRC/ZTP/writeZTP.cpp SRC/ZTP/tools.cpp SRC/ZTE/MATH/matrix.cpp SRC/ZTP/lod.cpp third_party/meshoptimizer/simplifier.cpp '-Wl,--gc-sections' -o obj/Debug/ztp_tests.exe
+& 'C:\Program Files\CodeBlocks\MinGW\bin\g++.exe' -std=gnu++14 -Wall -static -ffunction-sections -fdata-sections tests/ztp_tests.cpp SRC/ZTP/lodepng.cpp SRC/ZTP/load.cpp SRC/ZTP/writeZTP.cpp SRC/ZTP/tools.cpp SRC/ZTE/MATH/matrix.cpp SRC/ZTP/lod.cpp third_party/meshoptimizer/simplifier.cpp '-Wl,--gc-sections' -o obj/Debug/ztp_tests.exe
 if ($LASTEXITCODE -eq 0) { & .\obj\Debug\ztp_tests.exe }
 ```
 
@@ -52,8 +127,34 @@ textures, geometry, bounds, scale, frames and per-polygon attributes for static,
 animated and multi-mesh models, even if the global SGL mode initially equals 1.
 Save tests also check replacement, reloading and failure on a read-only target
 without damaging the existing contents.
+The texture-rebake test creates `obj/Debug/lod_texture_diagnostic.png`: the
+source atlas is shown beside the reduced mesh rasterized from its transferred
+UVs. The panels are compared pixel by pixel to catch UV drift.
+Same-material UV islands are also tested for seam isolation and point reduction.
+An overlapping folded surface checks that retained vertices keep their exact
+source UVs instead of taking coordinates from a geometrically nearby face.
 Passing a ZTP path to the test executable also checks that real model's
 round-trip in an isolated temporary directory without writing its source.
+Passing `--obj "C:\path\model.obj"` instead checks LOD generation and base
+replacement at 18%, 37% and 75% reduction: point reduction, the non-SGL point
+limit, and no new open boundary edges. The source OBJ is not modified.
+
+Real texture export coverage (including quad rebaking) uses a separate test:
+
+```powershell
+& 'C:\Program Files\CodeBlocks\MinGW\bin\gcc.exe' -c third_party/ufbx/ufbx.c -o obj/Debug/ufbx_tests.o
+if ($LASTEXITCODE -eq 0) { & 'C:\Program Files\CodeBlocks\MinGW\bin\g++.exe' -std=gnu++14 -static -ffunction-sections -fdata-sections tests/texture_export_tests.cpp SRC/ZTP/fbx.cpp SRC/ZTP/textures.cpp SRC/ZTP/lodepng.cpp SRC/ZTP/load.cpp SRC/ZTP/writeZTP.cpp SRC/ZTP/tools.cpp SRC/ZTP/vector.cpp SRC/ZTE/MATH/matrix.cpp SRC/ZTP/lod.cpp third_party/meshoptimizer/simplifier.cpp obj/Debug/ufbx_tests.o '-Wl,--gc-sections' -o obj/Debug/texture_export_tests.exe }
+if ($LASTEXITCODE -eq 0) { & .\obj\Debug\texture_export_tests.exe 'C:\path\model.obj' }
+```
+
+Append `--compressed` to enable 4-bit texture compression. When enabled, every
+exported texture must use a 16-color palette, including textures that initially
+contain more than 16 colors. Both export and preserve-save paths must reload
+with no unused texture entries and the expected texture byte count. Quad
+rebaking can still increase used texture bytes because generated texture
+dimensions are not proportional to face count.
+The integration test also converts Titan to quads in non-SGL mode, replaces
+the base at 1%, checks the 256-point limit and validates reloaded face indices.
 
 ## Automatic LOD prototype
 
@@ -68,13 +169,35 @@ All levels are saved with the base model in one ZTP; loaded levels can be previe
 Generation switches to the LOD preview; unchecking Show LOD restores
 the original. Moving the slider applies to the next generation. The status
 displays achieved face counts and the number of distinct referenced points.
+The Generate LOD menu can also replace the base mesh using the same reduction
+slider. The reduced base retains its texture/material references and animation
+frames and is the geometry written on Save. The original geometry, animation
+frames and LOD levels remain in memory until Restore original base is selected;
+restoring also reinstates the original LOD levels.
+
+Convert tris to quads globally matches compatible adjacent triangles on the
+current base mesh. It preserves point positions and animation frames, and does
+not run mesh simplification or reduce geometric quality. Existing material,
+surface-attribute, geometry and UV seam checks still apply. The matching
+maximizes the number of quads and orders shared edges by length as a tie-break
+heuristic when selecting among equally large matchings.
+Triangle normals may differ by up to 45 degrees; pairs need not be coplanar.
+Convexity is checked with cross products at two opposite corners.
 
 The generator uses meshoptimizer 1.3 to simplify triangulated source geometry.
 The target is relative to the original polygon count, not the temporary triangle
 count, so replacing a quad with two triangles does not count as a reduction.
+After simplification, compatible adjacent triangles are merged into quads for
+every generated LOD level; pairs that fail the existing geometry, material,
+attribute or UV continuity checks remain triangles.
 The target is at least four triangles per submesh, unless the source is smaller.
-A zero-percent target preserves the original geometry. If simplification would
-increase the face count, the original faces are kept for that submesh.
+A zero-percent target preserves the original geometry. If simplification does
+not reduce the triangulated index count, the original faces are kept for that submesh.
+Textured simplification runs separately per connected UV island and material.
+UV transfer stays within that island, and quad merging rejects discontinuous UV edges.
+Island boundary vertices remain fixed so independently simplified islands cannot
+separate at their seams. Faces incident to non-manifold edges are protected
+before partitioning into islands; these protections can limit the achieved reduction.
 
 Generated triangles use three distinct original vertex indices; the fourth
 polygon index repeats the third for compatibility with the existing structure.
@@ -124,7 +247,7 @@ are documented in [MTL.md](MTL.md).
 Run the focused tests from the workspace root in PowerShell:
 
 ```powershell
-& 'C:\Program Files\CodeBlocks\MinGW\bin\g++.exe' -std=gnu++14 -Wall -static tests/mtl_tests.cpp SRC/ZTP/textures.cpp SRC/ZTP/lodepng.cpp -o obj/Debug/mtl_tests.exe
+& 'C:\Program Files\CodeBlocks\MinGW\bin\g++.exe' -std=gnu++14 -Wall -static tests/mtl_tests.cpp SRC/ZTP/textures.cpp SRC/ZTP/lodepng.cpp SRC/ZTP/lod.cpp third_party/meshoptimizer/simplifier.cpp -o obj/Debug/mtl_tests.exe
 if ($LASTEXITCODE -eq 0) { & .\obj\Debug\mtl_tests.exe }
 ```
 
@@ -133,6 +256,9 @@ missing libraries, stream rewind, duplicate definitions, actual TGA/PNG
 loading in both UV modes, PNG alpha, legacy naming attributes, missing and
 unsupported diffuse maps, and the final placeholder. Image fixtures are
 created in the system temporary directory and removed after a successful run.
+The reduced-base integration test imports a two-color striped atlas with a
+same-material UV seam, reduces the mesh, and checks every rebaked texture pixel
+for island leakage and detail placement, allowing one atlas texel for sampling roundoff.
 
 Triangle texture deduplication tests cover cyclic rotations, mirrored winding,
 existing flip flags, UV tolerance, material isolation, and triangle/quad

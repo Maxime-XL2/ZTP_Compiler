@@ -34,6 +34,7 @@ using namespace std;
 
 
 #define maxPolygons (32768)
+const unsigned int ZTP_MAX_ANIMATION_FRAMES = 1024;
 const int ZTP_SIDE_PANEL_WIDTH = 340;
 const float conv              = M_PI/180.0f;
 
@@ -234,10 +235,18 @@ typedef struct
     uint16_t animID;
     uint16_t currentFrm;
     uint16_t currentKeyFrm;
-    uint16_t fps;
+    uint16_t frameDelta;
+    uint16_t sourceFrameDelta;
     uint16_t startFrm;
     uint16_t endFrm;
 } animationControl_t;
+
+struct animationFrameSample_t
+{
+    unsigned int firstFrame;
+    unsigned int secondFrame;
+    float fraction;
+};
 
 struct player_t
 {
@@ -279,10 +288,20 @@ unsigned int    selectedSurfaceCount();
 uint32_t        surfaceSelectionRevision();
 uint32_t        surfaceEditRevision();
 bool            saveZTPFile(const string & path, animated_model_t * model);
+uint64_t        calculateTextureExportSize(const animated_model_t * model, bool preserveUnusedTextures = false);
+extern uint32_t maxGeneratedTextureWidth;
+extern uint32_t maxGeneratedTextureHeight;
 bool            rayIntersectsPolygon(const float * origin, const float * direction, const model_t * mesh,
                                      const polygon_t * polygon, float minimumDistance);
 void            resetAutomaticLod();
+void            cacheAutomaticLodSourceTextures(animated_model_t * model, const texture_t * textures, unsigned int textureCount);
+void            discardAutomaticLodSourceTextures(const animated_model_t * model);
 bool            generateAutomaticLod(animated_model_t * model, unsigned int reductionPercent, unsigned int replaceLevel = 0);
+bool            mergeBaseTrianglesIntoQuads(animated_model_t * model);
+bool            replaceAutomaticLodBase(animated_model_t * model, unsigned int reductionPercent);
+bool            restoreAutomaticLodBase(animated_model_t * model);
+bool            hasAutomaticLodBaseSnapshot(const animated_model_t * model);
+void            discardAutomaticLodBaseSnapshot(const animated_model_t * model);
 bool            deleteAutomaticLod(animated_model_t * model, unsigned int level);
 const polygon_t * automaticLodFaces(const animated_model_t * model, unsigned int meshIndex, unsigned int * count);
 unsigned int    automaticLodFaceCount();
@@ -292,7 +311,23 @@ bool            selectAutomaticLod(animated_model_t * model, unsigned int level)
 extern bool     showAutomaticLod;
 void            resetSelfShadowing();
 bool            applyAnimationPose(animated_model_t * model, const animationControl_t & control, bool clamp, bool interpolate = true);
+bool            appendAnimationFrameSamples(unsigned int startFrame, unsigned int endFrame,
+                                             unsigned int sourceDelta, unsigned int targetDelta,
+                                             std::vector<animationFrameSample_t> * samples);
 void            updateSelfShadowing(animated_model_t * model, bool geometryChanged);
+bool            hasFbxBonePreview(const animated_model_t * model);
+bool            hasFbxSkeleton(const animated_model_t * model);
+bool            exportFbxSkeletonC(const animated_model_t * model, const string & path,
+                                    unsigned int * boneCount, unsigned int * nodeCount,
+                                    unsigned int * frameCount, unsigned long long * dataSizeBytes,
+                                    uint32_t * translationScaleQ16_16);
+void            discardFbxSkeleton(const animated_model_t * model);
+bool            setFbxBonePreview(animated_model_t * model, bool enabled);
+bool            setFbxBonePreviewPointRemap(animated_model_t * model,
+                                             const std::vector<unsigned int> & sourcePoints);
+bool            applyFbxBonePreviewPose(animated_model_t * model, unsigned int frame,
+                                         unsigned int nextFrame, float fraction, bool interpolate);
+void            discardFbxBonePreview(const animated_model_t * model);
 float           selfShadowFactor(unsigned int modelIndex, unsigned int vertexIndex);
 void            initializeLightSource(animated_model_t * model);
 bool            getLightSourcePosition(animated_model_t * model, float * position, float * markerRadius);

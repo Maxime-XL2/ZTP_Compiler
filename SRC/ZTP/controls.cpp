@@ -28,6 +28,32 @@ short   m_keyNewState[256]    = { 0 };
 short   m_keyOldState[256]    = { 0 };
 POINT   p                     = { 0 };
 VECTOR  m_pos                 = { 0 };
+static bool leftButtonWasDown = false;
+static bool rightButtonWasDown = false;
+static POINT previousCursor = {0, 0};
+
+void suspendModelControls(player_t * player)
+{
+    ZeroMemory(m_keys, sizeof(m_keys));
+    ZeroMemory(m_mouse, sizeof(m_mouse));
+    ZeroMemory(m_keyNewState, sizeof(m_keyNewState));
+    ZeroMemory(m_keyOldState, sizeof(m_keyOldState));
+    leftButtonWasDown = false;
+    rightButtonWasDown = false;
+    if (player)
+    {
+        player->MOVEMENT_SPEED = 0.0f;
+        player->LATERAL_SPEED = 0.0f;
+        player->IS_FIRING = 0;
+        for (unsigned int axis = 0; axis < XYZ; ++axis)
+        {
+            player->SPEED[axis] = 0.0f;
+            player->NEXT_POSITION[axis] = player->POSITION[axis];
+        }
+    }
+    extern HWND hwnd;
+    if (GetCursorPos(&previousCursor)) ScreenToClient(hwnd, &previousCursor);
+}
 
 void resetKeyPresses(player_t * player)
 {
@@ -121,9 +147,6 @@ void debugKeys(player_t * player)
 
 void mouse_controls(player_t * player, animated_model_t * model)
 {
-    static bool leftButtonWasDown = false;
-    static bool rightButtonWasDown = false;
-    static POINT previousCursor = {0, 0};
     bool leftButtonDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
     bool rightButtonDown = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
     bool leftButtonPressed = leftButtonDown && !leftButtonWasDown;

@@ -1,4 +1,6 @@
 #include "../COMMON.H"
+
+extern string fbxLoadError;
 #include <algorithm>
 #include <iomanip>
 #include <limits>
@@ -9,6 +11,7 @@
 #include <cstring>
 #include "mtl.h"
 extern int USE_SGL;
+extern bool loadFBX(const string &, float *, animated_model_t *, int, int, int, float, float, float);
 
 namespace
 {
@@ -126,7 +129,7 @@ bool readFixedVector(ZTPReader &reader, float *destination, unsigned int count)
 }
 
 static bool readLodDirectory(animated_model_t * model, const std::vector<uint8_t> & bytes,
-                             uint32_t lodOffset, unsigned int levels)
+                             uint32_t lodOffset, unsigned int levels, bool wideIndices)
 {
     const size_t directoryBytes = size_t(levels) * model->nbModels * 16;
     if (bytes.size() < directoryBytes) return false;
@@ -154,11 +157,11 @@ static bool readLodDirectory(animated_model_t * model, const std::vector<uint8_t
                     return false;
                 continue;
             }
-            if (points > previousPoints[mesh] || points > 256 || flags != 1 || faces > maxPolygons ||
+            if (points > previousPoints[mesh] || points > (wideIndices ? 65535u : 256u) || flags != 1 || faces > maxPolygons ||
                 !reduction || reduction > 99 || reduction <= previousReduction ||
                 (mesh && reduction != currentReduction) ||
                 (faces ? faceOffset != lodOffset + nextFace : faceOffset != 0) ||
-                uint64_t(nextFace) + uint64_t(faces) * 12 > bytes.size()) return false;
+                uint64_t(nextFace) + uint64_t(faces) * (wideIndices ? 16u : 12u) > bytes.size()) return false;
             currentReduction = reduction;
             previousPoints[mesh] = points;
             lod_mesh_t & lod = model->lodData->levels[level - 1].meshes[mesh];
@@ -169,8 +172,17 @@ static bool readLodDirectory(animated_model_t * model, const std::vector<uint8_t
             {
                 for (unsigned int corner = 0; corner < 4; ++corner)
                 {
-                    uint8_t point;
-                    if (!faceReader.readU8(point) || point >= points) return false;
+                    uint16_t point;
+                    if (wideIndices)
+                    {
+                        if (!faceReader.readU16(point) || point >= points) return false;
+                    }
+                    else
+                    {
+                        uint8_t compactPoint;
+                        if (!faceReader.readU8(compactPoint) || compactPoint >= points) return false;
+                        point = compactPoint;
+                    }
                     face.vertIdx[corner] = point;
                 }
                 uint16_t texture, command, attributes, color;
@@ -189,7 +201,7 @@ static bool readLodDirectory(animated_model_t * model, const std::vector<uint8_t
                 face.color.b = ((color >> 10) & 31) * 8;
                 face.color.a = 255;
             }
-            nextFace += size_t(faces) * 12;
+            nextFace += size_t(faces) * (wideIndices ? 16u : 12u);
         }
         if (level)
         {
@@ -210,6 +222,7 @@ static animated_model_t * readZTPFile(const string &filePath, bool sgl)
     std::vector<uint8_t> lodBlock;
     uint32_t lodOffset = 0;
     uint16_t levels = 1, containerMeshes = 0;
+    bool wideLodIndices = false;
     const bool modern = bytes.size() >= 4 && std::memcmp(bytes.data(), "ZTP_", 4) == 0;
     if (modern)
     {
@@ -226,9 +239,10 @@ static animated_model_t * readZTPFile(const string &filePath, bool sgl)
             !container.readU16(containerMeshes) || !container.readU32(flags) || modelOffset != 32 ||
             modelBytes > bytes.size() - 32 || !levels || levels > 64 || !containerMeshes || containerMeshes > 256 ||
             (levels == 1 ? (flags || lodOffset || lodBytes || modelBytes != bytes.size() - 32) :
-             (flags != 1 || lodOffset != ((32u + modelBytes + 3u) & ~3u) ||
+             ((flags != 1 && (!sgl || flags != 3)) || lodOffset != ((32u + modelBytes + 3u) & ~3u) ||
               uint64_t(lodOffset) + lodBytes != bytes.size())))
             return NULL;
+        wideLodIndices = flags == 3;
         if (levels > 1)
         {
             if (lodOffset > bytes.size()) return NULL;
@@ -451,7 +465,7 @@ static animated_model_t * readZTPFile(const string &filePath, bool sgl)
                 if (!reader.readU8(value)) return fail();
             }
         }
-        if (levels > 1 && !readLodDirectory(model, lodBlock, lodOffset, levels)) return fail();
+        if (levels > 1 && !readLodDirectory(model, lodBlock, lodOffset, levels, wideLodIndices)) return fail();
         extern void calcLight(animated_model_t *);
         calcLight(model);
         return model;
@@ -617,7 +631,7 @@ static animated_model_t * readZTPFile(const string &filePath, bool sgl)
                 std::copy(base.color, base.color + XYZ, animated.color);
             }
 
-    if (reader.remaining() || (levels > 1 && !readLodDirectory(model, lodBlock, lodOffset, levels)))
+    if (reader.remaining() || (levels > 1 && !readLodDirectory(model, lodBlock, lodOffset, levels, false)))
     {
         destroyLoadedZTP(model);
         return NULL;
@@ -1170,7 +1184,8 @@ void delete_unused_texture(unsigned int textID)
 #endif // 0
 
 
-void findScale(animated_model_t * aModel){
+void findScale(animated_model_t * aModel, bool allowUpscale){
+    if (!aModel) return;
     for (int j=0; j<3; j++){
        aModel->scale[j]=(float)1.0f;
     }
@@ -1179,8 +1194,10 @@ void findScale(animated_model_t * aModel){
 
     double scale[3]={1.0f, 1.0f, 1.0f};
     double maxValue[3]={0,0,0};
+    uint64_t totalPoints = 0;
 
     for (uint32_t i=0; i<aModel->nbModels; i++) {
+        totalPoints += aModel->model[i].nbPoint;
         for (uint32_t ii=0; ii<aModel->model[i].nbPoint; ii++){
            for (uint32_t j=0; j<3; j++){
                 maxValue[j]=MAX(maxValue[j], fabs(aModel->model[i].pntbl[ii].point[j]));
@@ -1188,8 +1205,9 @@ void findScale(animated_model_t * aModel){
         }
     }
     for (uint32_t i=0; i<aModel->nbFrames; i++){
-        vertex_t * v = &aModel->keyFrames[i].cVert[0];
-        for (uint32_t j=0; j<aModel->model[0].nbPoint; j++, v++){
+        if (!aModel->keyFrames || !aModel->keyFrames[i].cVert) continue;
+        vertex_t * v = aModel->keyFrames[i].cVert;
+        for (uint64_t j=0; j<totalPoints; j++, v++){
             for (uint32_t jj=0; jj<3; jj++){
               maxValue[jj]=MAX(maxValue[jj], fabs(v->point[jj]));
             }
@@ -1201,6 +1219,9 @@ void findScale(animated_model_t * aModel){
         //maxValue[i] = MAX(fabs(aModel->BoxMax[i]),fabs(aModel->BoxMin[i]));
         if (maxValue[i]>=126.5f){
             scale[i]=maxValue[i]/126.5f;
+        }
+        else if (allowUpscale && maxValue[i] > 0.0f){
+            scale[i]=MAX(maxValue[i]/126.5, 1.0/65536.0);
         }
     }
 
@@ -1218,10 +1239,9 @@ void findScale(animated_model_t * aModel){
         }
     }
     for (uint32_t i=0; i<aModel->nbFrames; i++){
-        vertex_t * v = &aModel->keyFrames[i].cVert[0];
-
-        for (uint32_t j=0; j<aModel->model[0].nbPoint; j++, v++){
-
+        if (!aModel->keyFrames || !aModel->keyFrames[i].cVert) continue;
+        vertex_t * v = aModel->keyFrames[i].cVert;
+        for (uint64_t j=0; j<totalPoints; j++, v++){
             for (uint32_t jj=0; jj<3; jj++){
               v->point[jj]*=invScale[jj];
             }
@@ -1230,7 +1250,107 @@ void findScale(animated_model_t * aModel){
 }
 
 string fileOutName;
-void LoadOBJ(string inFolder, string fileIn, float * scalefactor, animated_model_t * aModel, bool readOnly = false)
+static void rotateQuarterTurns(float * vector, int axis, int quarterTurns)
+{
+    quarterTurns = ((quarterTurns % 4) + 4) % 4;
+    for (int turn = 0; turn < quarterTurns; ++turn)
+    {
+        const float first = vector[axis == X ? Y : X];
+        const float second = vector[axis == Z ? Y : Z];
+        if (axis == X)
+        {
+            vector[Y] = -vector[Z];
+            vector[Z] = first;
+        }
+        else if (axis == Y)
+        {
+            vector[X] = second;
+            vector[Z] = -first;
+        }
+        else
+        {
+            vector[X] = -second;
+            vector[Y] = first;
+        }
+    }
+}
+
+void rotateModelData(animated_model_t * model, int rotationX, int rotationY, int rotationZ)
+{
+    const int rotations[3] = {rotationX, rotationY, rotationZ};
+    unsigned int frameOffset = 0;
+    for (unsigned int meshIndex = 0; meshIndex < model->nbModels; ++meshIndex)
+    {
+        model_t & mesh = model->model[meshIndex];
+        for (unsigned int point = 0; point < mesh.nbPoint; ++point)
+        {
+            for (int axis = X; axis <= Z; ++axis)
+            {
+                rotateQuarterTurns(mesh.pntbl[point].point, axis, rotations[axis]);
+                rotateQuarterTurns(mesh.pntbl[point].normal, axis, rotations[axis]);
+            }
+        }
+        for (unsigned int face = 0; face < mesh.nbPolygon; ++face)
+            for (int axis = X; axis <= Z; ++axis)
+                rotateQuarterTurns(mesh.pltbl[face].normal, axis, rotations[axis]);
+
+        for (unsigned int frame = 0; frame < model->nbFrames; ++frame)
+            for (unsigned int point = 0; point < mesh.nbPoint; ++point)
+                for (int axis = X; axis <= Z; ++axis)
+                {
+                    vertex_t & vertex = model->keyFrames[frame].cVert[frameOffset + point];
+                    rotateQuarterTurns(vertex.point, axis, rotations[axis]);
+                    rotateQuarterTurns(vertex.normal, axis, rotations[axis]);
+                }
+        frameOffset += mesh.nbPoint;
+    }
+}
+
+void translateModelData(animated_model_t * model, float translationX, float translationY, float translationZ)
+{
+    const float translation[3] = {translationX, translationY, translationZ};
+    const float largest = std::numeric_limits<float>::max();
+    for (int axis = X; axis <= Z; ++axis)
+    {
+        model->BoxMin[axis] = largest;
+        model->BoxMax[axis] = -largest;
+    }
+
+    unsigned int frameOffset = 0;
+    for (unsigned int meshIndex = 0; meshIndex < model->nbModels; ++meshIndex)
+    {
+        model_t & mesh = model->model[meshIndex];
+        for (int axis = X; axis <= Z; ++axis)
+        {
+            mesh.BoxMin[axis] = largest;
+            mesh.BoxMax[axis] = -largest;
+        }
+        for (unsigned int point = 0; point < mesh.nbPoint; ++point)
+        {
+            vertex_t & vertex = mesh.pntbl[point];
+            for (int axis = X; axis <= Z; ++axis)
+            {
+                vertex.point[axis] += translation[axis];
+                mesh.BoxMin[axis] = MIN(mesh.BoxMin[axis], vertex.point[axis]);
+                mesh.BoxMax[axis] = MAX(mesh.BoxMax[axis], vertex.point[axis]);
+                model->BoxMin[axis] = MIN(model->BoxMin[axis], vertex.point[axis]);
+                model->BoxMax[axis] = MAX(model->BoxMax[axis], vertex.point[axis]);
+            }
+        }
+        for (unsigned int frame = 0; frame < model->nbFrames; ++frame)
+            for (unsigned int point = 0; point < mesh.nbPoint; ++point)
+            {
+                vertex_t & vertex = model->keyFrames[frame].cVert[frameOffset + point];
+                for (int axis = X; axis <= Z; ++axis)
+                    vertex.point[axis] += translation[axis];
+            }
+        frameOffset += mesh.nbPoint;
+    }
+}
+
+void LoadOBJ(string inFolder, string fileIn, float * scalefactor, animated_model_t * aModel,
+             int rotationX, int rotationY, int rotationZ,
+             float translationX, float translationY, float translationZ, bool readOnly = false)
 {
     cout << "\nNow loading : " << fileIn << "\n";
     string fileInName = inFolder + fileIn + ".obj";
@@ -1280,10 +1400,11 @@ void LoadOBJ(string inFolder, string fileIn, float * scalefactor, animated_model
             sourceTextures.back().name = "None";
             createFakeTexture(&sourceTextures.back());
         }
+        cacheAutomaticLodSourceTextures(aModel, sourceTextures.data(), sourceTextures.size());
         aModel->nbTextures=0;
 
         polygon_t * pol;
-        for (uint32_t i=0; i<aModel->nbModels; i++)  {//Ici faut une boucle pour créer les nouvelles textures
+        for (uint32_t i=0; i<aModel->nbModels; i++)  {//Ici faut une boucle pour crï¿½er les nouvelles textures
             for (uint32_t ii=0; ii<aModel->model[i].nbPolygon; ii++){
                 pol=&aModel->model[i].pltbl[ii];
                 int materialIndex = pol->texture;
@@ -1340,6 +1461,213 @@ for (uint32_t i=0; i<m->nbPolygon; i++){
         if (newDist > 10.0* (float)scalefactor[X])
             p->isMask=1;
     }
+}
+#endif // 0
+#if 0
+
+static bool loadFBX(const string &filePath, float *scaleFactor, animated_model_t *model,
+                    int rotationX, int rotationY, int rotationZ,
+                    float translationX, float translationY, float translationZ)
+{
+    ufbx_load_opts loadOptions = {};
+    loadOptions.load_external_files = true;
+    loadOptions.ignore_missing_external_files = true;
+    ufbx_error error = {};
+    ufbx_scene *scene = ufbx_load_file(filePath.c_str(), &loadOptions, &error);
+    if (!scene)
+    {
+        char errorText[512] = {};
+        ufbx_format_error(errorText, sizeof(errorText), &error);
+        cerr << "ERROR READING FBX FILE: " << filePath << "\n" << errorText << "\n";
+        return false;
+    }
+
+    const ufbx_anim_stack *stack = scene->anim_stacks.count ? scene->anim_stacks.data[0] : NULL;
+    const ufbx_anim *animation = stack ? stack->anim : scene->anim;
+    const double timeBegin = stack ? stack->time_begin : 0.0;
+    const double timeEnd = stack ? stack->time_end : 0.0;
+    const unsigned int frameCount = MAX(1u, model->nbFrames);
+    model->nbFrames = frameCount;
+
+    ufbx_evaluate_opts evaluateOptions = {};
+    evaluateOptions.evaluate_skinning = true;
+    evaluateOptions.evaluate_caches = true;
+
+    const double firstTime = timeBegin;
+    ufbx_scene *firstPose = ufbx_evaluate_scene(scene, animation, firstTime, &evaluateOptions, &error);
+    if (!firstPose)
+    {
+        ufbx_free_scene(scene);
+        return false;
+    }
+
+    std::vector<size_t> meshNodes;
+    size_t totalPoints = 0;
+    for (size_t nodeIndex = 0; nodeIndex < firstPose->nodes.count; ++nodeIndex)
+    {
+        const ufbx_node *node = firstPose->nodes.data[nodeIndex];
+        if (!node->mesh || !node->visible) continue;
+        if (model->nbModels >= 256 || node->mesh->num_vertices > UINT_MAX - totalPoints)
+        {
+            ufbx_free_scene(firstPose);
+            ufbx_free_scene(scene);
+            return false;
+        }
+        meshNodes.push_back(nodeIndex);
+        totalPoints += node->mesh->num_vertices;
+    }
+    if (meshNodes.empty() || !totalPoints || uint64_t(totalPoints) * frameCount > 4u * 1024u * 1024u)
+    {
+        ufbx_free_scene(firstPose);
+        ufbx_free_scene(scene);
+        return false;
+    }
+
+    model->nbModels = static_cast<unsigned int>(meshNodes.size());
+    model->nbTextures = 0;
+    model->texture = new texture_t[1]();
+    size_t pointOffset = 0;
+    std::vector<std::vector<uint32_t> > faceTopology(meshNodes.size());
+    for (size_t meshIndex = 0; meshIndex < meshNodes.size(); ++meshIndex)
+    {
+        const ufbx_node *node = firstPose->nodes.data[meshNodes[meshIndex]];
+        const ufbx_mesh *mesh = node->mesh;
+        model_t &outMesh = model->model[meshIndex];
+        outMesh.nbPoint = static_cast<unsigned int>(mesh->num_vertices);
+        outMesh.pntbl = new vertex_t[outMesh.nbPoint]();
+        outMesh.pltbl = new polygon_t[mesh->num_triangles]();
+        outMesh.nbPolygon = static_cast<unsigned int>(mesh->num_triangles);
+        strncpy(outMesh.name, node->name.data, sizeof(outMesh.name) - 1);
+
+        size_t polygonIndex = 0;
+        std::vector<uint32_t> &topology = faceTopology[meshIndex];
+        for (size_t faceIndex = 0; faceIndex < mesh->num_faces; ++faceIndex)
+        {
+            const ufbx_face face = mesh->faces.data[faceIndex];
+            std::vector<uint32_t> triangles(static_cast<size_t>(face.num_indices > 2 ? face.num_indices - 2 : 0) * 3);
+            const size_t triangleCount = ufbx_triangulate_face(triangles.data(), triangles.size(), mesh, face);
+            if (triangleCount != face.num_indices - 2)
+            {
+                ufbx_free_scene(firstPose);
+                ufbx_free_scene(scene);
+                return false;
+            }
+            for (size_t triangle = 0; triangle < triangleCount; ++triangle)
+            {
+                polygon_t &polygon = outMesh.pltbl[polygonIndex++];
+                polygon_t defaults = {};
+                polygon = defaults;
+                polygon.texture = -1;
+                polygon.SGL_ATTR.atrb = CL_Gouraud;
+                for (unsigned int corner = 0; corner < 3; ++corner)
+                {
+                    const uint32_t meshCorner = triangles[triangle * 3 + corner];
+                    if (meshCorner >= mesh->vertex_indices.count) return false;
+                    const uint32_t pointIndex = mesh->vertex_indices.data[meshCorner];
+                    if (pointIndex >= mesh->num_vertices) return false;
+                    polygon.vertIdx[corner] = pointIndex;
+                    topology.push_back(pointIndex);
+                    if (mesh->vertex_uv.exists)
+                    {
+                        const ufbx_vec2 uv = ufbx_get_vertex_vec2(&mesh->vertex_uv, meshCorner);
+                        polygon.vertUV[corner].U = static_cast<float>(uv.x);
+                        polygon.vertUV[corner].V = static_cast<float>(uv.y);
+                    }
+                }
+                polygon.vertIdx[3] = polygon.vertIdx[2];
+                polygon.vertUV[3] = polygon.vertUV[2];
+            }
+        }
+        if (polygonIndex != outMesh.nbPolygon)
+        {
+            ufbx_free_scene(firstPose);
+            ufbx_free_scene(scene);
+            return false;
+        }
+
+        for (size_t pointIndex = 0; pointIndex < mesh->num_vertices; ++pointIndex)
+        {
+            vertex_t &vertex = outMesh.pntbl[pointIndex];
+            const uint32_t firstCorner = mesh->vertex_first_index.data[pointIndex];
+            ufbx_vec3 position = mesh->vertices.data[pointIndex];
+            if (firstCorner != UFBX_NO_INDEX && mesh->skinned_position.exists)
+                position = ufbx_get_vertex_vec3(&mesh->skinned_position, firstCorner);
+            if (mesh->skinned_is_local) position = ufbx_transform_position(&node->geometry_to_world, position);
+            vertex.point[0] = static_cast<float>(position.x) * scaleFactor[0];
+            vertex.point[1] = static_cast<float>(position.y) * scaleFactor[1];
+            vertex.point[2] = static_cast<float>(position.z) * scaleFactor[2];
+        }
+        pointOffset += mesh->num_vertices;
+    }
+
+    for (unsigned int frame = 0; frame < frameCount; ++frame)
+    {
+        const double time = frameCount > 1 ? timeBegin + (timeEnd - timeBegin) * frame / (frameCount - 1) : timeBegin;
+        ufbx_scene *pose = frame == 0 ? firstPose :
+            ufbx_evaluate_scene(scene, animation, time, &evaluateOptions, &error);
+        if (!pose)
+        {
+            ufbx_free_scene(firstPose);
+            ufbx_free_scene(scene);
+            return false;
+        }
+        model->keyFrames[frame].cVert = new vertex_t[totalPoints]();
+        size_t frameOffset = 0;
+        for (size_t meshIndex = 0; meshIndex < meshNodes.size(); ++meshIndex)
+        {
+            const ufbx_node *node = pose->nodes.data[meshNodes[meshIndex]];
+            const ufbx_mesh *mesh = node->mesh;
+            const ufbx_mesh *baseMesh = firstPose->nodes.data[meshNodes[meshIndex]]->mesh;
+            if (!mesh || mesh->num_vertices != baseMesh->num_vertices || mesh->num_faces != baseMesh->num_faces ||
+                mesh->vertex_indices.count != baseMesh->vertex_indices.count)
+            {
+                if (pose != firstPose) ufbx_free_scene(pose);
+                ufbx_free_scene(firstPose);
+                ufbx_free_scene(scene);
+                return false;
+            }
+            for (size_t index = 0; index < mesh->vertex_indices.count; ++index)
+                if (mesh->vertex_indices.data[index] != baseMesh->vertex_indices.data[index]) return false;
+            for (size_t faceIndex = 0; faceIndex < mesh->num_faces; ++faceIndex)
+            {
+                if (mesh->faces.data[faceIndex].index_begin != baseMesh->faces.data[faceIndex].index_begin ||
+                    mesh->faces.data[faceIndex].num_indices != baseMesh->faces.data[faceIndex].num_indices)
+                    return false;
+            }
+            const model_t &baseMeshData = model->model[meshIndex];
+            for (size_t pointIndex = 0; pointIndex < mesh->num_vertices; ++pointIndex)
+            {
+                vertex_t &vertex = model->keyFrames[frame].cVert[frameOffset + pointIndex];
+                vertex = baseMeshData.pntbl[pointIndex];
+                const uint32_t firstCorner = mesh->vertex_first_index.data[pointIndex];
+                ufbx_vec3 position = mesh->vertices.data[pointIndex];
+                if (firstCorner != UFBX_NO_INDEX && mesh->skinned_position.exists)
+                    position = ufbx_get_vertex_vec3(&mesh->skinned_position, firstCorner);
+                if (mesh->skinned_is_local) position = ufbx_transform_position(&node->geometry_to_world, position);
+                vertex.point[0] = static_cast<float>(position.x) * scaleFactor[0];
+                vertex.point[1] = static_cast<float>(position.y) * scaleFactor[1];
+                vertex.point[2] = static_cast<float>(position.z) * scaleFactor[2];
+            }
+            frameOffset += mesh->num_vertices;
+        }
+        if (pose != firstPose) ufbx_free_scene(pose);
+    }
+
+    extern void recalculateNormals(model_t *);
+    extern void pointNormals(model_t *);
+    for (unsigned int meshIndex = 0; meshIndex < model->nbModels; ++meshIndex)
+    {
+        recalculateNormals(&model->model[meshIndex]);
+        pointNormals(&model->model[meshIndex]);
+    }
+    rotateModelData(model, rotationX, rotationY, rotationZ);
+    translateModelData(model, translationX, translationY, translationZ);
+    calcLight(model);
+    findScale(model, false);
+
+    ufbx_free_scene(firstPose);
+    ufbx_free_scene(scene);
+    return true;
 }
 #endif // 0
     //if (aModel->nbFrames==0) reOrgModel(model);
@@ -1429,16 +1757,9 @@ for (uint32_t i=0; i<m->nbPolygon; i++){
     }
 
 
-    void calculateBoundingBox(float * boxMin, float * boxMax, vertex_t * vertexArray, unsigned int totalVertices);
-    aModel->BoxMin[X] = aModel->BoxMin[Y] = aModel->BoxMin[Z] =  65536.0f;
-    aModel->BoxMax[X] = aModel->BoxMax[Y] = aModel->BoxMax[Z] = -65536.0f;
-    for (uint32_t i = 0; i < aModel->nbModels; i++)
-    {
-        calculateBoundingBox(&aModel->BoxMin[X], &aModel->BoxMax[X], &aModel->model[i].pntbl[0], aModel->model[i].nbPoint); //Updates the whole thing
-        aModel->model[i].BoxMax[X]=aModel->model[i].BoxMax[Y]=aModel->model[i].BoxMax[Z]=-65536.0f;
-        aModel->model[i].BoxMin[X]=aModel->model[i].BoxMin[Y]=aModel->model[i].BoxMin[Z]= 65536.0f;
-        calculateBoundingBox(&aModel->model[i].BoxMin[X], &aModel->model[i].BoxMax[X], &aModel->model[i].pntbl[0], aModel->model[i].nbPoint); //Calculates the sub-model's bounding box in case you want to add per limb collision, headshots, etc.
-    }
+    rotateModelData(aModel, rotationX, rotationY, rotationZ);
+    translateModelData(aModel, translationX, translationY, translationZ);
+
     if (!useUV)    specialConditions(0, aModel->nbTextures, aModel);
     for (unsigned int modelIndex = 0; modelIndex < aModel->nbModels; ++modelIndex)
     {
@@ -1454,7 +1775,30 @@ for (uint32_t i=0; i<m->nbPolygon; i++){
 
 
 
-    findScale(aModel);
+    findScale(aModel, true);
+    if (rotationX || rotationY || rotationZ)
+    {
+        extern void recalculateNormals(model_t *);
+        extern void pointNormals(model_t *);
+        vertex_t * basePoints[256] = {};
+        uint32_t frameOffset = 0;
+        for (uint32_t meshIndex = 0; meshIndex < aModel->nbModels; ++meshIndex)
+        {
+            model_t & mesh = aModel->model[meshIndex];
+            basePoints[meshIndex] = mesh.pntbl;
+            for (uint32_t frame = 0; frame < aModel->nbFrames; ++frame)
+            {
+                mesh.pntbl = &aModel->keyFrames[frame].cVert[frameOffset];
+                recalculateNormals(&mesh);
+                pointNormals(&mesh);
+            }
+            mesh.pntbl = basePoints[meshIndex];
+            recalculateNormals(&mesh);
+            pointNormals(&mesh);
+            frameOffset += mesh.nbPoint;
+        }
+        calcLight(aModel);
+    }
 
 
 #if 0
@@ -1483,24 +1827,96 @@ if (!readOnly) fileOutName = /*"OUT/" +*/ fileIn;
 
 animated_model_t * loadingConfigured(unsigned int frameCount, int useSgl, float scale,
                                      uint32_t useUv, uint32_t specialOptions,
+                                     string path, string fileName, bool readOnly,
+                                     int rotationX, int rotationY, int rotationZ);
+animated_model_t * loadingConfigured(unsigned int frameCount, int useSgl, float scale,
+                                     uint32_t useUv, uint32_t specialOptions,
+                                     string path, string fileName, bool readOnly,
+                                     int rotationX, int rotationY, int rotationZ,
+                                     float translationX, float translationY, float translationZ);
+animated_model_t * loadingConfigured(unsigned int frameCount, int useSgl, float scale,
+                                     uint32_t useUv, uint32_t specialOptions,
+                                     string path, string fileName, bool readOnly,
+                                     int rotationX, int rotationY, int rotationZ,
+                                     float translationX, float translationY, float translationZ,
+                                     uint32_t maxTextureWidth, uint32_t maxTextureHeight);
+
+animated_model_t * loadingConfigured(unsigned int frameCount, int useSgl, float scale,
+                                     uint32_t useUv, uint32_t specialOptions,
                                      string path, string fileName, bool readOnly = false)
 {
+    return loadingConfigured(frameCount, useSgl, scale, useUv, specialOptions,
+                              path, fileName, readOnly, 0, 0, 0);
+}
+
+animated_model_t * loadingConfigured(unsigned int frameCount, int useSgl, float scale,
+                                     uint32_t useUv, uint32_t specialOptions,
+                                     string path, string fileName, bool readOnly,
+                                     int rotationX, int rotationY, int rotationZ)
+{
+    return loadingConfigured(frameCount, useSgl, scale, useUv, specialOptions, path, fileName,
+                              readOnly, rotationX, rotationY, rotationZ, 0.0f, 0.0f, 0.0f);
+}
+
+animated_model_t * loadingConfigured(unsigned int frameCount, int useSgl, float scale,
+                                     uint32_t useUv, uint32_t specialOptions,
+                                     string path, string fileName, bool readOnly,
+                                     int rotationX, int rotationY, int rotationZ,
+                                     float translationX, float translationY, float translationZ)
+{
+    return loadingConfigured(frameCount, useSgl, scale, useUv, specialOptions, path, fileName,
+        readOnly, rotationX, rotationY, rotationZ, translationX, translationY, translationZ, 1024, 256);
+}
+
+animated_model_t * loadingConfigured(unsigned int frameCount, int useSgl, float scale,
+                                     uint32_t useUv, uint32_t specialOptions,
+                                     string path, string fileName, bool readOnly,
+                                     int rotationX, int rotationY, int rotationZ,
+                                     float translationX, float translationY, float translationZ,
+                                     uint32_t maxTextureWidth, uint32_t maxTextureHeight)
+{
+    string extension = fileName.size() >= 4 ? fileName.substr(fileName.size() - 4) : "";
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+    const bool isFbx = extension == ".fbx";
+    if (!isFbx && frameCount > ZTP_MAX_ANIMATION_FRAMES)
+    {
+        cout << "Animation frame count exceeds " << ZTP_MAX_ANIMATION_FRAMES
+             << "; loading only the first " << ZTP_MAX_ANIMATION_FRAMES << " frames.\n";
+        frameCount = ZTP_MAX_ANIMATION_FRAMES;
+    }
+    if (!isFbx && !frameCount) frameCount = 1;
     USE_SGL = useSgl;
     useUV = useUv >= 1 ? 1 : 0;
     specialOption = specialOptions;
+    maxGeneratedTextureWidth = MAX(8u, MIN(maxTextureWidth, 65535u));
+    maxGeneratedTextureHeight = MAX(1u, MIN(maxTextureHeight, 256u));
 
     float scaleFactor[XYZ] = {scale, scale, scale};
     animated_model_t * newModel = new animated_model_t;
     ZeroMemory(newModel, sizeof(animated_model_t));
-    newModel->nbFrames = frameCount;
+    newModel->nbFrames = isFbx ? 0 : frameCount;
     newModel->sourceSgl = useSgl == 1 ? 1 : 0;
     newModel->framerate = 0;
     newModel->nbModels = 0;
     newModel->model = new model_t[256];
     ZeroMemory(newModel->model, sizeof(model_t) * 256);
-    newModel->keyFrames = new key_frame_t[newModel->nbFrames];
-    ZeroMemory(newModel->keyFrames, sizeof(key_frame_t) * newModel->nbFrames);
-    LoadOBJ(path, fileName, scaleFactor, newModel, readOnly);
+    newModel->keyFrames = isFbx ? NULL : new key_frame_t[newModel->nbFrames]();
+    fbxLoadError.clear();
+    if (extension == ".fbx")
+    {
+        if (!loadFBX(path + fileName, scaleFactor, newModel, rotationX, rotationY, rotationZ,
+                     translationX, translationY, translationZ))
+        {
+            cout << fbxLoadError << "\n";
+            destroyLoadedZTP(newModel);
+            return NULL;
+        }
+        fileOutName = fileName.substr(0, fileName.size() - 4);
+    }
+    else
+        LoadOBJ(path, fileName, scaleFactor, newModel, rotationX, rotationY, rotationZ,
+            translationX, translationY, translationZ, readOnly);
     return newModel;
 }
 
@@ -1558,7 +1974,7 @@ animated_model_t * loading(string line)
         cout << "\n***STEP 4***\n   Do you want to use UV coordinates to generate Saturn textures for each material?\n   Example : 0 for no, 1 for yes.\n\nUSE UV coordinates : ";
         cin >> useUV;
     }
-    if (useUV>=1) useUV=1;
+    if (useUV >= 1) useUV = 1;
 
     if (c[4]!=""){
         specialOption=std::atoi(c[4].c_str());
@@ -1588,8 +2004,11 @@ animated_model_t * loading(string line)
         bQuit = std::atoi(c[7].c_str())&1;
     }
 
+    const uint32_t maxTextureWidth = c[8] != "" ? MAX(8, std::atoi(c[8].c_str())) : 1024u;
+    const uint32_t maxTextureHeight = c[9] != "" ? MAX(1, std::atoi(c[9].c_str())) : 256u;
 
-    return loadingConfigured(frameCount, USE_SGL, scale, useUV, specialOption, path, fileName);
+    return loadingConfigured(frameCount, USE_SGL, scale, useUV, specialOption, path, fileName,
+        false, 0, 0, 0, 0.0f, 0.0f, 0.0f, maxTextureWidth, maxTextureHeight);
     //delete [] newModel.animation;
 
 

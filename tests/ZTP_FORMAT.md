@@ -35,10 +35,11 @@ An unknown `ZTP_` signature/version is rejected, not treated as a legacy file.
 | 20 | 4 | u32 | lodBytes: directory plus all LOD face streams, or zero |
 | 24 | 2 | u16 | levelCount: includes base level 0; 1..64 |
 | 26 | 2 | u16 | meshCount: must equal the payload's mesh count; 1..256 |
-| 28 | 4 | u32 | flags: bit 0 = LOD directory present; all other bits zero |
+| 28 | 4 | u32 | flags: bit 0 = LOD directory present; bit 1 = SGL LOD indices are u16 |
 
 Without added LODs: levelCount=1, flags=0, lodOffset=lodBytes=0 and file size
-equals 32+modelBytes. With added LODs: flags=1,
+equals 32+modelBytes. With added LODs: bit 0 is set; bit 1 is additionally set
+only for S01 files whose added LODs need more than 256 points,
 `lodOffset = align4(32 + modelBytes)` and file size equals lodOffset+lodBytes.
 The zero to three alignment bytes between payload and directory are zero.
 Offsets are from the start of the file, not from the payload or directory.
@@ -185,9 +186,11 @@ topology, not the additional LOD faces.
 S01 payload size is `44 + textureBytes + sum(24 + 24*meshPoints +
 32*meshPolygons) + F*frameStride`.
 
-SGL base meshes can use local u16 indices without LODs. With added LODs, the
-compiler currently requires every mesh to have at most 256 points, because the
-shared added-LOD face format uses u8 indices for both Z01 and S01.
+SGL base meshes support up to 65,535 points. Existing S01 LODs use u8 indices
+and remain byte-for-byte compatible. When an S01 LOD needs more than 256 active
+points, container flag bit 1 selects u16 LOD indices; all added LOD face records
+in that file then use the wide encoding. Z01 continues to use u8 LOD indices
+and is limited to 256 active points per mesh.
 
 ## LOD directory: 16 bytes per (level, mesh)
 
@@ -217,15 +220,19 @@ must be strictly less than activePointCount. Reduction is identical for all
 meshes within one level; it is an editor target, NOT a distance threshold or
 the guaranteed achieved reduction.
 
-## Added LOD face: 12 bytes, common to Z01 and S01
+## Added LOD face: compact and wide encodings
 
 | Offset | Type | Field |
 |---:|---|---|
-| 0 | u8[4] | LOCAL vertex indices into the mesh's shared point prefix |
-| 4 | u16 | texture sentinel: 0xFFFF (no texture lookup) |
-| 6 | u16 | FUNC_Polygon=4, sorting bits 12..13, dual-plane bit 11 |
-| 8 | u16 | PMOD: source attributes with color-mode bits 3..5 replaced by 5 (0x28) |
-| 10 | u16 | solid RGB555 color, normally bit 15 set |
+| 0 | u8[4] or u16[4] | LOCAL vertex indices into the mesh's shared point prefix |
+| 4 or 8 | u16 | texture sentinel: 0xFFFF (no texture lookup) |
+| 6 or 10 | u16 | FUNC_Polygon=4, sorting bits 12..13, dual-plane bit 11 |
+| 8 or 12 | u16 | PMOD: source attributes with color-mode bits 3..5 replaced by 5 (0x28) |
+| 10 or 14 | u16 | solid RGB555 color, normally bit 15 set |
+
+The compact encoding is 12 bytes and remains common to Z01 and S01. The wide
+encoding is 16 bytes, is valid only for S01, and is selected for the whole file
+by container flag bit 1. Wide point indices and the active point count are u16.
 
 Triangles repeat their third index in the fourth slot. Existing quads can
 remain when the simplifier falls back to source topology. Do not dereference

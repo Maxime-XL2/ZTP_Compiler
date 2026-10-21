@@ -2,6 +2,9 @@
 #include <algorithm>
 #include <vector>
 #include <cctype>
+    
+uint32_t maxGeneratedTextureWidth = 512;
+uint32_t maxGeneratedTextureHeight = 256;
 /*****
 CREDIT FOR TGA LOADING FUNCTIONS : JOHANNES FETZ, JO ENGINE
 DIRTY ADAPTATION BY XL2
@@ -76,9 +79,8 @@ int FillPalette(texture_t * texture, int compression)
         texture->colorDepth = COL_32K;
         return 0;
     }*/
-    if (compression > 0 || !(specialOption&1)) {
+    if (!(specialOption&1)) {
         if (!(specialOption&1)) cout << "Texture no. " << texture->textureId << " set to 16 bpp\n";
-        else        cout << "Texture no. " << texture->textureId <<" has more than 16 colors, can't compress more, resorting to 16 bpp\n";
         texture->colorDepth = COL_32K;
         return 0;
     }
@@ -398,43 +400,10 @@ texture->pixel = new pixel_t[height*width];
 }
 
 
-int checkIsTriangle(polygon_t * pol){
-    for (int i=0; i<4; i++){
-        for (int j=0; j<4; j++){
-            if (j==i) continue;
-            if (pol->vertIdx[i]==pol->vertIdx[j]) return j;
-        }
-    }
-    return 0;
-}
-
 #define uvTol (1.0f/256.0f)
-int uvCompare(polygon_t * pol1, polygon_t * pol2){
- /*   if (pol1->vertIdx[0]==pol1->vertIdx[1] ||
-        pol1->vertIdx[0]==pol1->vertIdx[3] ||
-        pol1->vertIdx[2]==pol1->vertIdx[3] ||
-        pol1->vertIdx[2]==pol1->vertIdx[1]) return 0; //Triangles...not working well atm...*/
-    if (checkIsTriangle(pol1) && !checkIsTriangle(pol2)) return 0;
-    if (checkIsTriangle(pol2) && !checkIsTriangle(pol1)) return 0;
-
-    int cnt = 0;
-    for (int i=0; i<4; i++){
-        for (int j=0; j<4; j++){
-            if ((fabs(pol1->vertUV[i].U-pol2->vertUV[j].U)<=uvTol)  && (fabs(pol1->vertUV[i].V-pol2->vertUV[j].V)<=uvTol)){
-                cnt++;
-                break;
-            }
-        }
-    }
-    if (cnt==4) return 1;
-    return 0;
-}
-
-
-
 void rotatePol(polygon_t * pol);
 void textureFlip(polygon_t * pol);
-static bool reuseTriangleTexture(polygon_t * polygon, const polygon_t * reference)
+static bool reuseFaceTexture(polygon_t * polygon, const polygon_t * reference)
 {
     for (unsigned int rotation = 0; rotation < 4; ++rotation)
     {
@@ -479,64 +448,7 @@ int checkExists (polygon_t * pol, animated_model_t * aModel, const string & sour
             if (newPol==pol) return 0;
             if (newPol->texture < 0 || newPol->texture >= static_cast<int>(aModel->nbTextures) ||
                 aModel->texture[newPol->texture].name != sourceName) continue;
-            if (checkIsTriangle(pol) || checkIsTriangle(newPol)) {
-                if (checkIsTriangle(pol) && checkIsTriangle(newPol) && reuseTriangleTexture(pol, newPol)) return 1;
-                continue;
-            }
-            if (uvCompare(pol, newPol)){
-                pol->texture = newPol->texture;
-                memcpy(&pol->SGL_ATTR, &newPol->SGL_ATTR, sizeof(ATTR));
-
-
-                int maxTry=0;
-                int idx = (checkIsTriangle(pol))&3;
-                while (1){
-                    if ((fabs(pol->vertUV[idx].U-newPol->vertUV[idx].U)<=uvTol)  && (fabs(pol->vertUV[idx].V-newPol->vertUV[idx].V)<=uvTol)) break;
-                    rotatePol(pol);
-                    if (++maxTry >= 4) {
-                       cout << "(!) Weird rotation bug...\n";
-                       break;
-                       // exit(123456789);
-                    }
-                }
-                //Triangle = buggy...
-                if (((fabs(pol->vertUV[1].U-newPol->vertUV[1].U)<=uvTol)  && (fabs(pol->vertUV[1].V-newPol->vertUV[1].V)<=uvTol))&&
-                    ((fabs(pol->vertUV[2].U-newPol->vertUV[2].U)<=uvTol)  && (fabs(pol->vertUV[2].V-newPol->vertUV[2].V)<=uvTol))) return 1; //No flip, all good
-                /*if (((fabs(pol->vertUV[1].U-newPol->vertUV[3].U)<=uvTol)  && (fabs(pol->vertUV[1].V-newPol->vertUV[3].V)<=uvTol)) &&
-                    ((fabs(pol->vertUV[3].U-newPol->vertUV[1].U)<=uvTol)  && (fabs(pol->vertUV[3].V-newPol->vertUV[1].V)<=uvTol))){*/
-                    //V flip
-                    while (idx) {
-                        rotatePol(pol);
-                        idx--;
-                    }
-                    textureFlip(pol);
-                    rotatePol(pol);
-                    rotatePol(pol);
-                    rotatePol(pol);
-                   /* maxTry=0;
-                   while (((fabs(pol->vertUV[1].U-newPol->vertUV[3].U)>uvTol)  || (fabs(pol->vertUV[1].V-newPol->vertUV[3].V)>uvTol))){
-                        rotatePol(pol);
-                        if (++maxTry > 10) {
-                            cout << "BUG...\n";
-                            exit(123456789);
-                        }
-                   }*/
-                   /* rotatePol(pol);
-
-                    textureFlip(pol);*/
-                    return 1;
-              //  }
-                /*if (((fabs(pol->vertUV[1].U-newPol->vertUV[3].U)<=uvTol)  && (fabs(pol->vertUV[1].V-newPol->vertUV[3].V)<=uvTol)) &&
-                    ((fabs(pol->vertUV[3].U-newPol->vertUV[1].U)<=uvTol)  && (fabs(pol->vertUV[3].V-newPol->vertUV[1].V)<=uvTol))){
-                    //V flip
-                    rotatePol(pol);
-                    textureFlip(pol);
-                    textureFlip(pol);
-                }*/
-
-                //Check winding, then Rotate/flip fix here...
-               // return 1;
-            }
+            if (reuseFaceTexture(pol, newPol)) return 1;
 
        }
     }
@@ -580,11 +492,19 @@ void createTexture(polygon_t * pol, animated_model_t * aModel, const texture_t &
     texture_t * text = &aModel->texture[aModel->nbTextures];
     aModel->texture[aModel->nbTextures].textureId = aModel->nbTextures;
     text->name = sourceTexture.name;
-    text->width = MAX( ((int)(sourceTexture.width*(bbMax[0]-bbMin[0])+7)/8)<<3, 8);
-    if (specialOption &  (1<<1))
-        text->height = MAX( ((int)(sourceTexture.height*(bbMax[1]-bbMin[1])+4)/8)<<3, 8);
+    const unsigned int naturalWidth = MAX(((int)(sourceTexture.width * (bbMax[0] - bbMin[0]) + 7) / 8) << 3, 8);
+    const unsigned int widthLimit = MAX(8u, (maxGeneratedTextureWidth / 8) * 8);
+    text->width = MIN(naturalWidth, widthLimit);
+    const unsigned int heightLimit = MIN(maxGeneratedTextureHeight, 256u);
+    if (specialOption & (1 << 1))
+    {
+        const unsigned int naturalHeight = MAX(((int)(sourceTexture.height * (bbMax[1] - bbMin[1]) + 4) / 8) << 3, 8);
+        const unsigned int alignedHeightLimit = MAX(8u, (heightLimit / 8) * 8);
+        text->height = MIN(naturalHeight, alignedHeightLimit);
+    }
     else
-        text->height = MAX((int)sourceTexture.height*(bbMax[1]-bbMin[1]), 1);
+        text->height = MIN(MAX(static_cast<unsigned int>(sourceTexture.height * (bbMax[1] - bbMin[1])), 1u),
+                           MAX(heightLimit, 1u));
     text->pixel = new pixel_t[text->width*text->height]();
 
     cout << "Texture width = " << text->width << ", height = " << text->height << "\n";

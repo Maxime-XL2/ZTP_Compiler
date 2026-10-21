@@ -58,6 +58,7 @@ GLubyte meshEffectArray[]={
 int activeModel = 0;
 int activeFace = -1;
 int playAnimation = 1;
+bool animationLoopPlayback = true;
 int activeShading = 1;
 extern float animationPlaybackSpeed;
 static double animationAdvanceRemainder = 0.0;
@@ -75,14 +76,17 @@ void ztUpdateAnimation(animationControl_t * animCtrl, animated_model_t * current
     //model_t * currentPDATA = currentModel->model[0];
 
     /**Sets the animation data**/
-    uint32_t FPS = MIN(animCtrl->fps, 10);
-    uint32_t frameUnit = 1u << FPS;
+    uint32_t frameUnit = MAX(1u, MIN(static_cast<uint32_t>(animCtrl->sourceFrameDelta), 60u));
+    uint32_t outputFrameDelta = MAX(1u, MIN(static_cast<uint32_t>(animCtrl->frameDelta), 60u));
+    animCtrl->frameDelta = static_cast<uint16_t>(outputFrameDelta);
     uint32_t startFrame = animCtrl->startFrm;
     uint32_t endFrame = MIN(animCtrl->endFrm, currentModel->nbFrames);
     if (endFrame <= startFrame) return;
 
     uint32_t rangeStart = startFrame * frameUnit;
-    uint32_t rangeEnd = endFrame * frameUnit;
+    const uint32_t durationTicks = (endFrame - startFrame - 1) * frameUnit;
+    const uint32_t sampleCount = (durationTicks + outputFrameDelta - 1) / outputFrameDelta + 1;
+    uint32_t rangeEnd = rangeStart + sampleCount * outputFrameDelta;
     uint32_t currentFrame = animCtrl->currentFrm;
     if (currentFrame < rangeStart || currentFrame >= rangeEnd) currentFrame = rangeStart;
     animationAdvanceRemainder += ZT_FRAMERATE * static_cast<double>(animationPlaybackSpeed);
@@ -90,14 +94,24 @@ void ztUpdateAnimation(animationControl_t * animCtrl, animated_model_t * current
     animationAdvanceRemainder -= advance;
     currentFrame += advance;
     if (currentFrame >= rangeEnd)
-        currentFrame = rangeStart + (currentFrame - rangeStart) % (rangeEnd - rangeStart);
+    {
+        if (animationLoopPlayback)
+            currentFrame = rangeStart + (currentFrame - rangeStart) % (rangeEnd - rangeStart);
+        else
+        {
+            currentFrame = rangeEnd - 1;
+            playAnimation = 0;
+            animationAdvanceRemainder = 0.0;
+        }
+    }
     animCtrl->currentFrm = static_cast<uint16_t>(currentFrame);
-    animCtrl->fps = static_cast<uint16_t>(FPS);
+    animCtrl->sourceFrameDelta = static_cast<uint16_t>(frameUnit);
 
-    animCtrl->currentKeyFrm = static_cast<uint16_t>(currentFrame >> FPS);
+    animCtrl->currentKeyFrm = static_cast<uint16_t>((currentFrame - rangeStart) /
+        outputFrameDelta);
 
     extern int enableInterpolation;
-    applyAnimationPose(currentModel, *animCtrl, false, enableInterpolation != 0);
+    applyAnimationPose(currentModel, *animCtrl, !animationLoopPlayback, enableInterpolation != 0);
 }
 
 void vectorNormalize(float * v) {
@@ -124,7 +138,6 @@ void renderLightSource(animated_model_t * model)
     glDisable(GL_CULL_FACE);
     glDisable(GL_POLYGON_STIPPLE);
     glDisable(GL_BLEND);
-    glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
     glColor3f(1.0f, 0.85f, 0.15f);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
@@ -420,6 +433,7 @@ int render(animated_model_t * aModel, animated_model_t * comparison, const unsig
                     projected_grid::Vertex corners[4] = {};
                     bool canProject = true;
                     const bool selected = !reference && isSurfaceSelected(static_cast<int>(m), static_cast<int>(i));
+                    const bool wireframe = (DisplayTEST & 1) != 0;
                     for (unsigned int corner = 0; corner < 4; ++corner)
                     {
                         curVert = &curModel->pntbl[pol->vertIdx[corner]];
@@ -443,8 +457,10 @@ int render(animated_model_t * aModel, animated_model_t * comparison, const unsig
                             corners[corner].color[3] = 1.0f;
                         }
                     }
+                    const bool fillSelectedFace = wireframe && selected;
+                    if (fillSelectedFace) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
                     if (canProject)
-                        renderProjectedGrid(corners, viewport[2], viewport[3], (DisplayTEST & 1) != 0);
+                        renderProjectedGrid(corners, viewport[2], viewport[3], wireframe && !selected);
                     else
                     {
                         glBegin(GL_QUADS);
@@ -456,6 +472,7 @@ int render(animated_model_t * aModel, animated_model_t * comparison, const unsig
                         }
                         glEnd();
                     }
+                    if (fillSelectedFace) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
                     renderShadow(curModel, pol, aModel->BoxMax[Y]);
                 }
             }
@@ -593,6 +610,14 @@ void renderText(animated_model_t * model){
     drawText( &nbModel[0], 0, 1); //, 4);
     drawText( &nbFace  [0], 0, 2); //, 4);
     drawText("RIGHT CLICK TO LOOK, LEFT CLICK TO SELECT POLYGON", 0, 3);
+    if (model->nbFrames)
+    {
+        const unsigned int frame = MIN(static_cast<unsigned int>(PLAYER[0].ANIMCTRL.currentKeyFrm),
+                                       model->nbFrames - 1);
+        string frameInfo = "FRAME : " + std::to_string(frame + 1) + " / " +
+            std::to_string(model->nbFrames);
+        drawText(&frameInfo[0], 0, 4);
+    }
 
     const int infoPosY = 47;
     const int polInfoPos[2] = {0, 35};
