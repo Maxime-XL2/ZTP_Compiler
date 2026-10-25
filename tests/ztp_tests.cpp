@@ -1101,6 +1101,26 @@ static void checkUnusedTextureExport()
     model->model = new model_t[1]();
     model->model[0].nbPoint = 3;
     model->model[0].pntbl = new vertex_t[3]();
+    model->model[0].pntbl[0].point[X] = 1.25f;
+    model->model[0].pntbl[0].point[Y] = -2.25f;
+    model->model[0].pntbl[1].point[X] = -3.5f;
+    model->model[0].pntbl[1].point[Y] = 5.1f;
+    model->model[0].pntbl[1].point[Z] = 2.25f;
+    model->model[0].pntbl[2].point[X] = 2.0f;
+    model->model[0].pntbl[2].point[Y] = 3.0f;
+    model->model[0].pntbl[2].point[Z] = -4.0f;
+    model->nbFrames = 1;
+    model->keyFrames = new key_frame_t[1]();
+    model->keyFrames[0].cVert = new vertex_t[3]();
+    model->keyFrames[0].cVert[0].point[X] = 20.2f;
+    model->keyFrames[0].cVert[0].point[Y] = -8.7f;
+    model->keyFrames[0].cVert[0].point[Z] = 3.6f;
+    model->keyFrames[0].cVert[1].point[X] = -4.25f;
+    model->keyFrames[0].cVert[1].point[Y] = 17.6f;
+    model->keyFrames[0].cVert[1].point[Z] = -15.6f;
+    model->keyFrames[0].cVert[2].point[X] = 7.0f;
+    model->keyFrames[0].cVert[2].point[Y] = 6.0f;
+    model->keyFrames[0].cVert[2].point[Z] = 9.0f;
     model->model[0].nbPolygon = 1;
     model->model[0].pltbl = new polygon_t[1]();
     polygon_t & face = model->model[0].pltbl[0];
@@ -1140,6 +1160,14 @@ static void checkUnusedTextureExport()
 
         animated_model_t * reloaded = loadZTPFile(path);
         assert(reloaded && reloaded->nbTextures == 1);
+        const float expectedMin[XYZ] = {sgl ? -4.25f : -4.0f, sgl ? -8.6875f : -9.0f,
+                                        sgl ? -15.5625f : -16.0f};
+        const float expectedMax[XYZ] = {sgl ? 20.1875f : 20.0f, sgl ? 17.5625f : 18.0f, 9.0f};
+        for (unsigned int axis = 0; axis < XYZ; ++axis)
+        {
+            assert(std::fabs(reloaded->BoxMin[axis] - expectedMin[axis]) < 0.0001f);
+            assert(std::fabs(reloaded->BoxMax[axis] - expectedMax[axis]) < 0.0001f);
+        }
         assert(reloaded->model[0].pltbl[0].texture == 0);
         assert(reloaded->model[0].pltbl[0].SGL_ATTR.texno == 0);
         assert(reloaded->texture[0].pixel[0].rgb == 0x83E0);
@@ -1185,6 +1213,14 @@ int main(int argumentCount, char **arguments)
         ifstream source(arguments[1], ios::binary | ios::ate);
         assert(source.good());
         originalSize = static_cast<size_t>(source.tellg());
+        if (originalSize >= 32)
+        {
+            char signature[4] = {};
+            source.seekg(0);
+            source.read(signature, sizeof(signature));
+            if (source.gcount() == sizeof(signature) && std::memcmp(signature, "ZTP_", 4) == 0)
+                originalSize -= 32;
+        }
     }
 
     char originalDirectory[MAX_PATH] = {}, temporaryDirectory[MAX_PATH] = {}, temporaryPath[MAX_PATH] = {};
@@ -1242,6 +1278,8 @@ int main(int argumentCount, char **arguments)
     assert(indexed->model[0].pltbl[0].SGL_ATTR.sorting == 2);
     assert(indexed->model[0].pltbl[0].SGL_ATTR.flag == 1);
     assert(indexed->keyFrames[0].cVert[1].point[X] == 20);
+    assert(indexed->BoxMin[X] == 0 && indexed->BoxMin[Y] == 0 && indexed->BoxMin[Z] == 0);
+    assert(indexed->BoxMax[X] == 20 && indexed->BoxMax[Y] == 20 && indexed->BoxMax[Z] == 0);
     assert(indexed->texture[0].pixel[0].palette_idx == 1);
     assert(indexed->texture[0].pixel[0].rgb == 0x801F);
     checkRoundTrip(indexed, COL_16, "indexed_TEST.ZTP");

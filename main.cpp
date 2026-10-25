@@ -9,6 +9,7 @@
 #include <sstream>
 #include <cmath>
 #include <cctype>
+#include <new>
 #include <vector>
 
 LRESULT CALLBACK WindowProc(HWND, UINT, WPARAM, LPARAM);
@@ -28,6 +29,7 @@ extern void setTextures(animated_model_t *);
 extern void setModelTextures(animated_model_t *, unsigned int *);
 extern void refreshModelTextures(animated_model_t *, unsigned int);
 extern void resetPlayer(player_t *);
+extern int ReadTGAFile(string, texture_t *, string);
 extern animated_model_t * loadingConfigured(unsigned int, int, float, uint32_t, uint32_t, string, string, bool = false);
 extern animated_model_t * loadingConfigured(unsigned int, int, float, uint32_t, uint32_t, string, string,
                                              bool, int, int, int);
@@ -42,6 +44,7 @@ extern bool enableSelfShadowing;
 extern void resetAnimationPlaybackTiming();
 extern void setLightOrientation(float azimuthDegrees, float elevationDegrees);
 extern void calcLight(animated_model_t *);
+extern int render(animated_model_t *, animated_model_t *, const unsigned int *, const unsigned int *);
 extern float defLight[3];
 extern HWND hwnd;
 float animationPlaybackSpeed = 1.0f;
@@ -59,6 +62,11 @@ const int IDM_FILE_SAVE = 1006;
 const int IDM_FILE_SAVE_AS = 1007;
 const int IDM_EXPORT_SKELETON = 1008;
 const int IDM_OPTIONS = 1101;
+const int IDM_SKIN_LOAD = 1201;
+const int IDM_SKIN_PREVIEW_BASE = 1202;
+const int IDM_SKIN_EXPORT = 1203;
+const int IDM_SKIN_REMOVE = 1204;
+const int IDM_SKIN_PREVIEW_FIRST = 30000;
 const int SIDE_PANEL_WIDTH = ZTP_SIDE_PANEL_WIDTH;
 const int IDC_FRAME_COUNT = 2001;
 const int IDC_FRAME_COUNT_LABEL = 2009;
@@ -74,7 +82,7 @@ const int IDC_CURRENT_FILE = 2102;
 const int IDC_SURFACE_STATUS = 2103;
 const int IDC_SELECTION_HELP = 2104;
 const int IDC_SURFACE_DOUBLE_SIDED = 2110;
-const int IDC_SURFACE_UV_DIRECTION = 2111;
+const int IDC_SURFACE_ENVIRONMENTAL_MAPPING = 2111;
 const int IDC_SURFACE_MESH = 2112;
 const int IDC_SURFACE_GOURAUD = 2113;
 const int IDC_SURFACE_LIGHT = 2114;
@@ -86,6 +94,11 @@ const int IDC_SURFACE_FLIP = 2120;
 const int IDC_SURFACE_ROTATE = 2121;
 const int IDC_SURFACE_SORT = 2122;
 const int IDC_SORT_STATUS = 2123;
+const int IDC_SURFACE_TEXTURE_PREVIEW = 2124;
+const int IDC_SURFACE_TEXTURE_INFO = 2125;
+const int IDC_SURFACE_TEXTURE_SIZE_LABEL = 2126;
+const int IDC_SURFACE_TEXTURE_SIZE = 2127;
+const int IDC_SURFACE_TEXTURE_APPLY = 2128;
 const int IDC_MODEL_GROUP = 2130;
 const int IDC_SURFACE_GROUP = 2131;
 const int IDC_ANIMATION_SPEED_LABEL = 2140;
@@ -129,6 +142,7 @@ const int IDC_ANIMATION_FRAME_DELTA = 2184;
 const int IDC_ANIMATION_RESAMPLE = 2185;
 const float animationSpeedValues[] = {0.0f, 0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
 const float cameraSpeedValues[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f, 16.0f};
+const unsigned int surfaceTextureSizeOptions[] = {8, 16, 32, 64, 128, 256};
 
 struct LoadOptions
 {
@@ -163,13 +177,25 @@ struct PreviewAnimationRange
     unsigned int storedDelta;
 };
 
-LoadOptions loadOptions = {100, 0, 1.0f, true, 1, 1024, 256, 0, 0, 0, 0.0f, 0.0f, 0.0f};
+struct SkinVariant
+{
+    string name;
+    texture_t atlas;
+    animated_model_t * model;
+    std::vector<unsigned int> textureIds;
+
+    SkinVariant() : atlas(), model(NULL) {}
+};
+
+LoadOptions loadOptions = {100, 0, 1.0f, true, 1, 32, 32, 0, 0, 0, 0.0f, 0.0f, 0.0f};
 animated_model_t * currentModel = NULL;
 animated_model_t * comparisonModel = NULL;
 std::vector<unsigned int> comparisonTextureIds;
+std::vector<SkinVariant> skinVariants;
+int previewSkinIndex = -1;
 std::vector<PreviewAnimationRange> addedAnimations;
 std::vector<string> protectedReferencePaths;
-LoadOptions comparisonOptions = {static_cast<int>(ZTP_MAX_ANIMATION_FRAMES), 0, 1.0f, true, 1, 1024, 256, 0, 0, 0, 0.0f, 0.0f, 0.0f};
+LoadOptions comparisonOptions = {static_cast<int>(ZTP_MAX_ANIMATION_FRAMES), 0, 1.0f, true, 1, 512, 256, 0, 0, 0, 0.0f, 0.0f, 0.0f};
 string currentFolder;
 string currentFile;
 bool glReady = false;
@@ -185,9 +211,12 @@ uint32_t savedEditRevision = 0;
 uint32_t savedLodRevision = 0;
 std::vector<std::vector<vertex_t> > ztpBasePose;
 uint32_t shownSelectionRevision = 0xFFFFFFFFu;
+HBITMAP surfaceTexturePreviewBitmap = NULL;
 
 string absoluteModelPath(const string & path);
 bool confirmZTPSave(HWND owner);
+void rebuildSkinVariants(HWND owner);
+void syncSkinSurfaceAttributes();
 
 void updateFileMenu(HWND owner)
 {
@@ -206,6 +235,57 @@ void updateFileMenu(HWND owner)
     EnableMenuItem(fileMenu, IDM_EXPORT_SKELETON, MF_BYCOMMAND |
         (hasFbxSkeleton(currentModel) ? MF_ENABLED : MF_GRAYED));
     DrawMenuBar(owner);
+}
+
+void updateSkinMenu(HWND owner)
+{
+    HMENU skinMenu = GetSubMenu(GetMenu(owner), 1);
+    if (!skinMenu) return;
+    while (GetMenuItemCount(skinMenu) > 0) DeleteMenu(skinMenu, 0, MF_BYPOSITION);
+    AppendMenuA(skinMenu, MF_STRING | (currentModel ? MF_ENABLED : MF_GRAYED),
+                IDM_SKIN_LOAD, "Load skin atlas (OBJ/FBX)...");
+    AppendMenuA(skinMenu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(skinMenu, MF_STRING | (currentModel ? MF_ENABLED : MF_GRAYED),
+                IDM_SKIN_PREVIEW_BASE, "Preview base model");
+    for (unsigned int index = 0; index < skinVariants.size(); ++index)
+    {
+        string label = "Skin " + std::to_string(index + 1) + ": " + skinVariants[index].name;
+        AppendMenuA(skinMenu, MF_STRING |
+            (skinVariants[index].model ? MF_ENABLED : MF_GRAYED),
+            IDM_SKIN_PREVIEW_FIRST + index, label.c_str());
+    }
+    AppendMenuA(skinMenu, MF_SEPARATOR, 0, NULL);
+    const bool hasSelectedSkin = previewSkinIndex >= 0 &&
+        previewSkinIndex < static_cast<int>(skinVariants.size()) &&
+        skinVariants[previewSkinIndex].model;
+    AppendMenuA(skinMenu, MF_STRING | (hasSelectedSkin ? MF_ENABLED : MF_GRAYED),
+                IDM_SKIN_EXPORT, "Export selected skin model...");
+    AppendMenuA(skinMenu, MF_STRING | (hasSelectedSkin ? MF_ENABLED : MF_GRAYED),
+                IDM_SKIN_REMOVE, "Remove selected skin");
+    CheckMenuItem(skinMenu,
+        previewSkinIndex < 0 ? IDM_SKIN_PREVIEW_BASE :
+            IDM_SKIN_PREVIEW_FIRST + previewSkinIndex,
+        MF_BYCOMMAND | MF_CHECKED);
+    DrawMenuBar(owner);
+}
+
+void refreshLodStatus(HWND owner, unsigned int selected)
+{
+    unsigned int baseFaces = 0, basePoints = 0;
+    if (currentModel)
+        for (unsigned int mesh = 0; mesh < currentModel->nbModels; ++mesh)
+        {
+            baseFaces += currentModel->model[mesh].nbPolygon;
+            basePoints += currentModel->model[mesh].nbPoint;
+        }
+    char status[128];
+    const double textureSizeKiB = calculateTextureExportSize(currentModel, false) / 1024.0;
+    if (selected)
+        sprintf(status, "Faces: %u / %u\r\nPoints: %u / %u\r\nTextures: %.1f KiB",
+            automaticLodFaceCount(), baseFaces, automaticLodPointCount(), basePoints, textureSizeKiB);
+    else sprintf(status, "Faces: %u\r\nPoints: %u\r\nTextures: %.1f KiB",
+        baseFaces, basePoints, textureSizeKiB);
+    SetDlgItemTextA(owner, IDC_LOD_STATUS, status);
 }
 
 void refreshLodControls(HWND owner, unsigned int selected = 0)
@@ -227,21 +307,7 @@ void refreshLodControls(HWND owner, unsigned int selected = 0)
     if (selected) selectAutomaticLod(currentModel, selected);
     else resetAutomaticLod();
     CheckDlgButton(owner, IDC_LOD_SHOW, selected ? BST_CHECKED : BST_UNCHECKED);
-    unsigned int baseFaces = 0, basePoints = 0;
-    if (currentModel)
-        for (unsigned int mesh = 0; mesh < currentModel->nbModels; ++mesh)
-        {
-            baseFaces += currentModel->model[mesh].nbPolygon;
-            basePoints += currentModel->model[mesh].nbPoint;
-        }
-    char status[128];
-    const double textureSizeKiB = calculateTextureExportSize(currentModel, false) / 1024.0;
-    if (selected)
-        sprintf(status, "Faces: %u / %u\r\nPoints: %u / %u\r\nTextures: %.1f KiB",
-            automaticLodFaceCount(), baseFaces, automaticLodPointCount(), basePoints, textureSizeKiB);
-    else sprintf(status, "Faces: %u\r\nPoints: %u\r\nTextures: %.1f KiB",
-        baseFaces, basePoints, textureSizeKiB);
-    SetDlgItemTextA(owner, IDC_LOD_STATUS, status);
+    refreshLodStatus(owner, selected);
 }
 
 void refreshAnimationRangeControls(HWND owner, animated_model_t * model)
@@ -326,9 +392,19 @@ bool hasAnimatedPointPositions(const animated_model_t * model)
     return false;
 }
 
-bool writeAnimationSidecar(const string & path, const std::vector<PreviewAnimationRange> & animations)
+bool writeAnimationSidecar(const string & path, const std::vector<PreviewAnimationRange> & animations,
+                           const std::vector<PreviewAnimationRange> & memoryAnimations)
 {
-    if (animations.empty())
+    if (animations.size() != memoryAnimations.size()) return false;
+    bool hasAnimations = false;
+    for (unsigned int index = 0; index < animations.size(); ++index)
+    {
+        const bool hasOutputRange = animations[index].startFrame <= animations[index].endFrame;
+        const bool hasMemoryRange = memoryAnimations[index].startFrame <= memoryAnimations[index].endFrame;
+        if (hasOutputRange != hasMemoryRange) return false;
+        hasAnimations = hasAnimations || hasOutputRange;
+    }
+    if (!hasAnimations)
     {
         if (DeleteFileA(path.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND ||
             GetLastError() == ERROR_PATH_NOT_FOUND) return true;
@@ -339,10 +415,24 @@ bool writeAnimationSidecar(const string & path, const std::vector<PreviewAnimati
     std::ofstream output(temporaryPath.c_str(), std::ios::out | std::ios::trunc);
     if (!output) return false;
     output << "ZTP_ANIMATIONS 4\n";
-    for (const PreviewAnimationRange & animation : animations)
+    for (unsigned int index = 0; index < animations.size(); ++index)
+    {
+        const PreviewAnimationRange & animation = animations[index];
+        if (animation.startFrame > animation.endFrame) continue;
         output << animation.startFrame << ' ' << animation.endFrame << ' '
                << (animation.loop ? 1 : 0) << ' ' << animation.frameDelta << ' '
                << animation.storedDelta << ' ' << animation.name << '\n';
+    }
+    output << "# In-memory frame indexes (0-based):\n";
+    for (unsigned int index = 0; index < memoryAnimations.size(); ++index)
+    {
+        const PreviewAnimationRange & animation = memoryAnimations[index];
+        if (animation.startFrame > animation.endFrame) continue;
+        const string name = animation.name.empty() ?
+            "Animation " + std::to_string(index + 1) : animation.name;
+        output << "# " << name << ": " << animation.startFrame << '-'
+               << animation.endFrame << '\n';
+    }
     output.close();
     if (!output.good() || !MoveFileExA(temporaryPath.c_str(), path.c_str(),
         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
@@ -355,7 +445,7 @@ bool writeAnimationSidecar(const string & path, const std::vector<PreviewAnimati
 
 bool saveAnimationSidecar()
 {
-    return writeAnimationSidecar(animationSidecarPath(), addedAnimations);
+    return writeAnimationSidecar(animationSidecarPath(), addedAnimations, addedAnimations);
 }
 
 void loadAnimationSidecar(animated_model_t * model)
@@ -754,8 +844,25 @@ void createSidePanel(HWND parent)
     addControl(parent, "STATIC", "No model loaded", SS_LEFT, 0, 0, 10, 10, IDC_CURRENT_FILE);
     addControl(parent, "STATIC", "Select a polygon to edit", SS_LEFT, 0, 0, 10, 10, IDC_SURFACE_STATUS);
     addControl(parent, "STATIC", "Ctrl+click: add/remove | Ctrl+A: all", SS_LEFT, 0, 0, 10, 10, IDC_SELECTION_HELP);
+    addControl(parent, "STATIC", "", SS_BITMAP, 0, 0, 10, 10, IDC_SURFACE_TEXTURE_PREVIEW);
+    addControl(parent, "STATIC", "No texture selected", SS_LEFT, 0, 0, 10, 10, IDC_SURFACE_TEXTURE_INFO);
+    addControl(parent, "STATIC", "Max size", SS_LEFT, 0, 0, 10, 10, IDC_SURFACE_TEXTURE_SIZE_LABEL);
+    addControl(parent, "COMBOBOX", "", CBS_DROPDOWNLIST | WS_TABSTOP, 0, 0, 10, 10,
+        IDC_SURFACE_TEXTURE_SIZE);
+    for (unsigned int index = 0; index < sizeof(surfaceTextureSizeOptions) / sizeof(surfaceTextureSizeOptions[0]); ++index)
+    {
+        char label[32];
+        sprintf(label, "%u px", surfaceTextureSizeOptions[index]);
+        SendDlgItemMessageA(parent, IDC_SURFACE_TEXTURE_SIZE, CB_ADDSTRING, 0,
+            reinterpret_cast<LPARAM>(label));
+    }
+    SendDlgItemMessageA(parent, IDC_SURFACE_TEXTURE_SIZE, CB_SETCURSEL, 0, 0);
+    addControl(parent, "BUTTON", "Apply to polygon", BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 10, 10,
+        IDC_SURFACE_TEXTURE_APPLY);
+    EnableWindow(GetDlgItem(parent, IDC_SURFACE_TEXTURE_SIZE), FALSE);
+    EnableWindow(GetDlgItem(parent, IDC_SURFACE_TEXTURE_APPLY), FALSE);
     addControl(parent, "BUTTON", "Double-sided", BS_3STATE, 0, 0, 10, 10, IDC_SURFACE_DOUBLE_SIDED);
-    addControl(parent, "BUTTON", "Reverse UV direction", BS_3STATE, 0, 0, 10, 10, IDC_SURFACE_UV_DIRECTION);
+    addControl(parent, "BUTTON", "Environmental mapping", BS_3STATE, 0, 0, 10, 10, IDC_SURFACE_ENVIRONMENTAL_MAPPING);
     addControl(parent, "BUTTON", "Mesh display", BS_3STATE, 0, 0, 10, 10, IDC_SURFACE_MESH);
     addControl(parent, "BUTTON", "Gouraud shading", BS_3STATE, 0, 0, 10, 10, IDC_SURFACE_GOURAUD);
     addControl(parent, "BUTTON", "Use light", BS_3STATE, 0, 0, 10, 10, IDC_SURFACE_LIGHT);
@@ -862,7 +969,9 @@ void createSidePanel(HWND parent)
     const int controlIds[] = {
         IDM_COMPARISON_OPEN, IDM_COMPARISON_REMOVE, IDC_COMPARISON_FILE,
         IDC_OPEN_ANOTHER, IDC_CURRENT_FILE, IDC_SURFACE_STATUS, IDC_SELECTION_HELP,
-        IDC_SURFACE_DOUBLE_SIDED, IDC_SURFACE_UV_DIRECTION, IDC_SURFACE_MESH,
+        IDC_SURFACE_TEXTURE_INFO, IDC_SURFACE_TEXTURE_SIZE_LABEL, IDC_SURFACE_TEXTURE_SIZE,
+        IDC_SURFACE_TEXTURE_APPLY,
+        IDC_SURFACE_DOUBLE_SIDED, IDC_SURFACE_ENVIRONMENTAL_MAPPING, IDC_SURFACE_MESH,
         IDC_SURFACE_GOURAUD, IDC_SURFACE_LIGHT, IDC_SURFACE_DEPTH,
         IDC_SURFACE_PALETTE, IDC_SURFACE_NEAR_CLIP, IDC_SURFACE_REALTIME_GOURAUD,
         IDC_SURFACE_FLIP, IDC_SURFACE_ROTATE, IDC_SURFACE_SORT, IDC_SORT_STATUS,
@@ -894,16 +1003,21 @@ void layoutSidePanel(HWND parent)
         {IDC_OPEN_ANOTHER, 20, 29, width - 24, 28},
         {IDC_CURRENT_FILE, 20, 60, width - 24, 28},
         {IDC_SELECTION_HELP, 20, 91, width - 24, 20},
-        {IDC_SURFACE_STATUS, 20, 154, width - 24, 32},
-        {IDC_SURFACE_DOUBLE_SIDED, 20, 187, width - 24, 20},
-        {IDC_SURFACE_UV_DIRECTION, 20, 208, width - 24, 20},
-        {IDC_SURFACE_MESH, 20, 229, width - 24, 20},
-        {IDC_SURFACE_GOURAUD, 20, 250, width - 24, 20},
-        {IDC_SURFACE_LIGHT, 20, 271, width - 24, 20},
-        {IDC_SURFACE_DEPTH, 20, 292, width - 24, 20},
-        {IDC_SURFACE_PALETTE, 20, 313, width - 24, 20},
-        {IDC_SURFACE_NEAR_CLIP, 20, 334, width - 24, 20},
-        {IDC_SURFACE_REALTIME_GOURAUD, 20, 355, width - 24, 20},
+        {IDC_SURFACE_STATUS, 20, 154, width - 24, 26},
+        {IDC_SURFACE_TEXTURE_PREVIEW, 20, 182, 96, 68},
+        {IDC_SURFACE_TEXTURE_INFO, 124, 182, width - 144, 68},
+        {IDC_SURFACE_TEXTURE_SIZE_LABEL, 20, 257, 72, 20},
+        {IDC_SURFACE_TEXTURE_SIZE, 92, 254, 96, 150},
+        {IDC_SURFACE_TEXTURE_APPLY, 194, 254, width - 218, 24},
+        {IDC_SURFACE_DOUBLE_SIDED, 20, 282, (width - 48) / 2, 19},
+        {IDC_SURFACE_ENVIRONMENTAL_MAPPING, 20, 301, (width - 48) / 2, 19},
+        {IDC_SURFACE_MESH, 20, 320, (width - 48) / 2, 19},
+        {IDC_SURFACE_GOURAUD, 20, 339, (width - 48) / 2, 19},
+        {IDC_SURFACE_LIGHT, 20, 358, (width - 48) / 2, 19},
+        {IDC_SURFACE_DEPTH, 174, 282, (width - 48) / 2, 19},
+        {IDC_SURFACE_PALETTE, 174, 301, (width - 48) / 2, 19},
+        {IDC_SURFACE_NEAR_CLIP, 174, 320, (width - 48) / 2, 19},
+        {IDC_SURFACE_REALTIME_GOURAUD, 174, 339, (width - 48) / 2, 19},
         {IDC_SURFACE_FLIP, 20, 382, (width - 36) / 2, 24},
         {IDC_SURFACE_ROTATE, 24 + (width - 36) / 2, 382, (width - 36) / 2, 24},
         {IDC_SURFACE_SORT, 20, 412, width - 24, 24},
@@ -970,12 +1084,259 @@ void resizeOpenGLView(HWND parent)
     glLoadIdentity();
 }
 
+HBITMAP createSurfaceTexturePreview(const texture_t & texture)
+{
+    const int previewWidth = 96;
+    const int previewHeight = 68;
+    if (!texture.pixel || !texture.width || !texture.height ||
+        (texture.colorDepth != COL_16 && texture.colorDepth != COL_32K)) return NULL;
+
+    BITMAPINFO bitmapInfo = {};
+    bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bitmapInfo.bmiHeader.biWidth = previewWidth;
+    bitmapInfo.bmiHeader.biHeight = -previewHeight;
+    bitmapInfo.bmiHeader.biPlanes = 1;
+    bitmapInfo.bmiHeader.biBitCount = 32;
+    bitmapInfo.bmiHeader.biCompression = BI_RGB;
+
+    HDC deviceContext = GetDC(hwnd);
+    if (!deviceContext) return NULL;
+    void * bitmapPixels = NULL;
+    HBITMAP bitmap = CreateDIBSection(deviceContext, &bitmapInfo, DIB_RGB_COLORS,
+                                      &bitmapPixels, NULL, 0);
+    ReleaseDC(hwnd, deviceContext);
+    if (!bitmap || !bitmapPixels)
+    {
+        if (bitmap) DeleteObject(bitmap);
+        return NULL;
+    }
+
+    unsigned char * destination = static_cast<unsigned char *>(bitmapPixels);
+    for (int y = 0; y < previewHeight; ++y)
+        for (int x = 0; x < previewWidth; ++x)
+        {
+            const unsigned char background = ((x / 8 + y / 8) & 1) ? 72 : 104;
+            const size_t offset = (static_cast<size_t>(y) * previewWidth + x) * 4;
+            destination[offset] = background;
+            destination[offset + 1] = background;
+            destination[offset + 2] = background;
+            destination[offset + 3] = 0;
+        }
+
+    const double scale = MIN(static_cast<double>(previewWidth) / texture.width,
+                             static_cast<double>(previewHeight) / texture.height);
+    const unsigned int drawWidth = MAX(1u, static_cast<unsigned int>(std::lround(texture.width * scale)));
+    const unsigned int drawHeight = MAX(1u, static_cast<unsigned int>(std::lround(texture.height * scale)));
+    const unsigned int offsetX = (previewWidth - drawWidth) / 2;
+    const unsigned int offsetY = (previewHeight - drawHeight) / 2;
+    for (unsigned int y = 0; y < drawHeight; ++y)
+        for (unsigned int x = 0; x < drawWidth; ++x)
+        {
+            const unsigned int sourceX = MIN(texture.width - 1,
+                static_cast<unsigned int>((uint64_t(x) * 2 + 1) * texture.width / (uint64_t(drawWidth) * 2)));
+            const unsigned int sourceY = MIN(texture.height - 1,
+                static_cast<unsigned int>((uint64_t(y) * 2 + 1) * texture.height / (uint64_t(drawHeight) * 2)));
+            const pixel_t & pixel = texture.pixel[static_cast<size_t>(sourceY) * texture.width + sourceX];
+            const uint16_t color = texture.colorDepth == COL_32K ? pixel.rgb :
+                texture.clut[MIN(static_cast<unsigned int>(pixel.palette_idx), 15u)];
+            const size_t destinationOffset =
+                (static_cast<size_t>(offsetY + y) * previewWidth + offsetX + x) * 4;
+            destination[destinationOffset] = static_cast<unsigned char>(((color >> 10) & 0x1F) * 255 / 31);
+            destination[destinationOffset + 1] = static_cast<unsigned char>(((color >> 5) & 0x1F) * 255 / 31);
+            destination[destinationOffset + 2] = static_cast<unsigned char>((color & 0x1F) * 255 / 31);
+        }
+    return bitmap;
+}
+
+bool updateSurfaceTexturePreview(HWND parent, const texture_t * texture)
+{
+    HBITMAP replacement = texture ? createSurfaceTexturePreview(*texture) : NULL;
+    HBITMAP previous = reinterpret_cast<HBITMAP>(SendDlgItemMessageA(parent,
+        IDC_SURFACE_TEXTURE_PREVIEW, STM_SETIMAGE, IMAGE_BITMAP,
+        reinterpret_cast<LPARAM>(replacement)));
+    surfaceTexturePreviewBitmap = replacement;
+    if (previous) DeleteObject(previous);
+    return !texture || replacement != NULL;
+}
+
+bool resizeActiveSurfaceTexture(unsigned int maxDimension, bool * changed, string * error)
+{
+    *changed = false;
+    if (!currentModel || activeModel < 0 || activeModel >= static_cast<int>(currentModel->nbModels) ||
+        activeFace < 0 || activeFace >= static_cast<int>(currentModel->model[activeModel].nbPolygon))
+    {
+        *error = "Select a polygon before changing its texture size.";
+        return false;
+    }
+    if (!currentModel->texture || maxDimension < 8 || maxDimension > 256 || (maxDimension & 7))
+    {
+        *error = "The selected polygon has no resizable texture.";
+        return false;
+    }
+
+    polygon_t & polygon = currentModel->model[activeModel].pltbl[activeFace];
+    if (polygon.texture < 0 || polygon.texture >= static_cast<int>(currentModel->nbTextures))
+    {
+        *error = "The selected polygon has no texture.";
+        return false;
+    }
+    texture_t & source = currentModel->texture[polygon.texture];
+    if (!source.pixel || !source.width || !source.height ||
+        (source.colorDepth != COL_16 && source.colorDepth != COL_32K))
+    {
+        *error = "The selected texture has invalid pixel data or an unsupported color depth.";
+        return false;
+    }
+
+    const int sourceTextureIndex = polygon.texture;
+    const ATTR originalAttributes = polygon.SGL_ATTR;
+    unsigned int textureReferences = 0;
+    for (unsigned int mesh = 0; mesh < currentModel->nbModels; ++mesh)
+        for (unsigned int face = 0; face < currentModel->model[mesh].nbPolygon; ++face)
+            if (currentModel->model[mesh].pltbl[face].texture == sourceTextureIndex)
+                ++textureReferences;
+    if (currentModel->lodData)
+        for (const lod_level_t & level : currentModel->lodData->levels)
+            for (const lod_mesh_t & mesh : level.meshes)
+                for (const polygon_t & face : mesh.faces)
+                    if (face.texture == sourceTextureIndex) ++textureReferences;
+
+    texture_t cachedSource = {};
+    if (useUV && getCachedSourceTextureForSurface(currentModel,
+            static_cast<unsigned int>(activeModel), static_cast<unsigned int>(activeFace), &cachedSource))
+    {
+        if ((textureReferences > 1 && currentModel->nbTextures >= 1280) ||
+            currentModel->nbTextures >= 2048)
+        {
+            *error = "The model has reached its texture limit; this surface cannot get a separate texture.";
+            return false;
+        }
+        const unsigned int appendedTextureIndex = currentModel->nbTextures;
+        if (!createTextureAtMaxDimension(&polygon, currentModel, cachedSource, maxDimension))
+        {
+            *error = "Could not regenerate this surface texture from its source image.";
+            return false;
+        }
+
+        const unsigned int generatedTextureIndex = currentModel->nbTextures - 1;
+        texture_t & generated = currentModel->texture[generatedTextureIndex];
+        bool identical = generated.width == source.width && generated.height == source.height &&
+            generated.colorDepth == source.colorDepth;
+        const size_t sourcePixelCount = static_cast<size_t>(source.width) * source.height;
+        if (identical)
+            identical = std::memcmp(generated.clut, source.clut, sizeof(source.clut)) == 0 &&
+                std::memcmp(generated.pixel, source.pixel, sourcePixelCount * sizeof(pixel_t)) == 0;
+        if (identical)
+        {
+            delete [] generated.pixel;
+            generated.pixel = NULL;
+            currentModel->nbTextures = appendedTextureIndex;
+            polygon.texture = sourceTextureIndex;
+            polygon.SGL_ATTR = originalAttributes;
+            return true;
+        }
+
+        const uint16_t generatedColor = generated.SGL_ATTR.colno;
+        if (textureReferences == 1)
+        {
+            texture_t replacement = generated;
+            delete [] source.pixel;
+            source = replacement;
+            source.textureId = static_cast<unsigned int>(sourceTextureIndex);
+            source.SGL_ATTR.texno = static_cast<uint16_t>(sourceTextureIndex);
+            generated.pixel = NULL;
+            currentModel->nbTextures = appendedTextureIndex;
+            polygon.texture = sourceTextureIndex;
+            polygon.SGL_ATTR = originalAttributes;
+            polygon.SGL_ATTR.texno = static_cast<uint16_t>(sourceTextureIndex);
+        }
+        else
+        {
+            polygon.SGL_ATTR = originalAttributes;
+            polygon.SGL_ATTR.texno = static_cast<uint16_t>(generatedTextureIndex);
+            currentModel->texture[generatedTextureIndex].SGL_ATTR.texno =
+                static_cast<uint16_t>(generatedTextureIndex);
+        }
+        polygon.SGL_ATTR.colno = generatedColor;
+        *changed = true;
+        return true;
+    }
+
+    const unsigned int sourceMaxDimension = MAX(source.width, source.height);
+    const unsigned int proportionalWidth = static_cast<unsigned int>(
+        (uint64_t(source.width) * maxDimension + sourceMaxDimension / 2) / sourceMaxDimension);
+    const unsigned int alignedWidth = ((proportionalWidth + 4u) / 8u) * 8u;
+    const unsigned int targetWidth = MAX(8u, MIN(maxDimension, alignedWidth));
+    const unsigned int targetHeight = MAX(1u, static_cast<unsigned int>(
+        (uint64_t(source.height) * maxDimension + sourceMaxDimension / 2) / sourceMaxDimension));
+    if (targetWidth == source.width && targetHeight == source.height) return true;
+
+    const size_t targetPixelCount = static_cast<size_t>(targetWidth) * targetHeight;
+    pixel_t * resizedPixels = new (std::nothrow) pixel_t[targetPixelCount];
+    if (!resizedPixels)
+    {
+        *error = "Not enough memory to resize this texture.";
+        return false;
+    }
+    for (unsigned int y = 0; y < targetHeight; ++y)
+        for (unsigned int x = 0; x < targetWidth; ++x)
+        {
+            const unsigned int sourceX = MIN(source.width - 1,
+                static_cast<unsigned int>((uint64_t(x) * 2 + 1) * source.width / (uint64_t(targetWidth) * 2)));
+            const unsigned int sourceY = MIN(source.height - 1,
+                static_cast<unsigned int>((uint64_t(y) * 2 + 1) * source.height / (uint64_t(targetHeight) * 2)));
+            resizedPixels[static_cast<size_t>(y) * targetWidth + x] =
+                source.pixel[static_cast<size_t>(sourceY) * source.width + sourceX];
+        }
+
+    if (textureReferences > 1)
+    {
+        if (currentModel->nbTextures >= 1280)
+        {
+            delete [] resizedPixels;
+            *error = "The model has reached the 1280-texture export limit; this surface cannot get a separate texture.";
+            return false;
+        }
+        const unsigned int newTextureIndex = currentModel->nbTextures;
+        texture_t * replacement = new (std::nothrow) texture_t[2048]();
+        if (!replacement)
+        {
+            delete [] resizedPixels;
+            *error = "Not enough memory to add a separate surface texture.";
+            return false;
+        }
+        for (unsigned int index = 0; index < currentModel->nbTextures; ++index)
+            replacement[index] = currentModel->texture[index];
+        replacement[newTextureIndex] = source;
+        replacement[newTextureIndex].width = targetWidth;
+        replacement[newTextureIndex].height = targetHeight;
+        replacement[newTextureIndex].textureId = newTextureIndex;
+        replacement[newTextureIndex].pixel = resizedPixels;
+        replacement[newTextureIndex].SGL_ATTR.texno = static_cast<uint16_t>(newTextureIndex);
+
+        delete [] currentModel->texture;
+        currentModel->texture = replacement;
+        ++currentModel->nbTextures;
+        polygon.texture = static_cast<int>(newTextureIndex);
+        polygon.SGL_ATTR.texno = static_cast<uint16_t>(newTextureIndex);
+    }
+    else
+    {
+        delete [] source.pixel;
+        source.pixel = resizedPixels;
+        source.width = targetWidth;
+        source.height = targetHeight;
+    }
+    *changed = true;
+    return true;
+}
+
 void updateSurfacePanel(HWND parent, animated_model_t * model)
 {
     SetDlgItemTextA(parent, IDC_CURRENT_FILE,
         model && !currentFile.empty() ? currentFile.c_str() : "No model loaded");
     const int editControls[] = {
-        IDC_SURFACE_DOUBLE_SIDED, IDC_SURFACE_UV_DIRECTION, IDC_SURFACE_MESH,
+        IDC_SURFACE_DOUBLE_SIDED, IDC_SURFACE_ENVIRONMENTAL_MAPPING, IDC_SURFACE_MESH,
         IDC_SURFACE_GOURAUD, IDC_SURFACE_LIGHT, IDC_SURFACE_DEPTH,
         IDC_SURFACE_PALETTE, IDC_SURFACE_NEAR_CLIP, IDC_SURFACE_REALTIME_GOURAUD,
         IDC_SURFACE_FLIP, IDC_SURFACE_ROTATE, IDC_SURFACE_SORT
@@ -988,6 +1349,10 @@ void updateSurfacePanel(HWND parent, animated_model_t * model)
     {
         SetDlgItemTextA(parent, IDC_SURFACE_STATUS, "Select a polygon to edit");
         SetDlgItemTextA(parent, IDC_SORT_STATUS, "Sort mode: --");
+        SetDlgItemTextA(parent, IDC_SURFACE_TEXTURE_INFO, "Select a textured polygon");
+        updateSurfaceTexturePreview(parent, NULL);
+        EnableWindow(GetDlgItem(parent, IDC_SURFACE_TEXTURE_SIZE), FALSE);
+        EnableWindow(GetDlgItem(parent, IDC_SURFACE_TEXTURE_APPLY), FALSE);
         shownSelectionRevision = surfaceSelectionRevision();
         return;
     }
@@ -999,13 +1364,62 @@ void updateSurfacePanel(HWND parent, animated_model_t * model)
     int sortMode = selectedSortMode(model);
     sprintf(sortingStatus, "Sort mode: %s", sortMode < 0 ? "MIXED" : sortingModeName(sortMode));
     SetDlgItemTextA(parent, IDC_SORT_STATUS, sortingStatus);
+    const texture_t * surfaceTexture = NULL;
+    if (activeModel >= 0 && activeModel < static_cast<int>(model->nbModels) &&
+        activeFace >= 0 && activeFace < static_cast<int>(model->model[activeModel].nbPolygon))
+    {
+        const polygon_t & polygon = model->model[activeModel].pltbl[activeFace];
+        if (model->texture && polygon.texture >= 0 &&
+            polygon.texture < static_cast<int>(model->nbTextures))
+            surfaceTexture = &model->texture[polygon.texture];
+    }
+    if (surfaceTexture && surfaceTexture->pixel && surfaceTexture->width && surfaceTexture->height)
+    {
+        char textureInfo[160];
+        const char * colorDepth = surfaceTexture->colorDepth == COL_16 ? "4 bpp palette" :
+            surfaceTexture->colorDepth == COL_32K ? "15 bpp RGB" : "Unsupported depth";
+        sprintf(textureInfo, "Texture %d\n%u x %u px\n%s",
+            model->model[activeModel].pltbl[activeFace].texture,
+            surfaceTexture->width, surfaceTexture->height, colorDepth);
+        if (!updateSurfaceTexturePreview(parent, surfaceTexture))
+            strcat(textureInfo, "\nPreview unavailable");
+        SetDlgItemTextA(parent, IDC_SURFACE_TEXTURE_INFO, textureInfo);
+        unsigned int currentMaxDimension = MAX(surfaceTexture->width, surfaceTexture->height);
+        unsigned int bestIndex = 0;
+        unsigned int bestDistance = UINT_MAX;
+        for (unsigned int index = 0;
+             index < sizeof(surfaceTextureSizeOptions) / sizeof(surfaceTextureSizeOptions[0]); ++index)
+        {
+            const unsigned int distance = currentMaxDimension > surfaceTextureSizeOptions[index] ?
+                currentMaxDimension - surfaceTextureSizeOptions[index] :
+                surfaceTextureSizeOptions[index] - currentMaxDimension;
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                bestIndex = index;
+            }
+        }
+        SendDlgItemMessageA(parent, IDC_SURFACE_TEXTURE_SIZE, CB_SETCURSEL, bestIndex, 0);
+        const bool resizable = surfaceTexture->colorDepth == COL_16 ||
+            surfaceTexture->colorDepth == COL_32K;
+        EnableWindow(GetDlgItem(parent, IDC_SURFACE_TEXTURE_SIZE), resizable);
+        EnableWindow(GetDlgItem(parent, IDC_SURFACE_TEXTURE_APPLY), resizable);
+    }
+    else
+    {
+        SetDlgItemTextA(parent, IDC_SURFACE_TEXTURE_INFO,
+            surfaceTexture ? "Texture pixel data is unavailable" : "Selected polygon has no texture");
+        updateSurfaceTexturePreview(parent, NULL);
+        EnableWindow(GetDlgItem(parent, IDC_SURFACE_TEXTURE_SIZE), FALSE);
+        EnableWindow(GetDlgItem(parent, IDC_SURFACE_TEXTURE_APPLY), FALSE);
+    }
     const int optionControls[] = {
-        IDC_SURFACE_DOUBLE_SIDED, IDC_SURFACE_UV_DIRECTION, IDC_SURFACE_MESH,
+        IDC_SURFACE_DOUBLE_SIDED, IDC_SURFACE_ENVIRONMENTAL_MAPPING, IDC_SURFACE_MESH,
         IDC_SURFACE_GOURAUD, IDC_SURFACE_LIGHT, IDC_SURFACE_DEPTH,
         IDC_SURFACE_PALETTE, IDC_SURFACE_NEAR_CLIP, IDC_SURFACE_REALTIME_GOURAUD
     };
     const surface_edit_operation operations[] = {
-        SURFACE_TOGGLE_DOUBLE_SIDED, SURFACE_TOGGLE_UV_DIRECTION, SURFACE_TOGGLE_MESH,
+        SURFACE_TOGGLE_DOUBLE_SIDED, SURFACE_TOGGLE_ENVIRONMENTAL_MAPPING, SURFACE_TOGGLE_MESH,
         SURFACE_TOGGLE_GOURAUD, SURFACE_TOGGLE_LIGHT, SURFACE_TOGGLE_DEPTH,
         SURFACE_TOGGLE_PALETTE, SURFACE_TOGGLE_NEAR_CLIP, SURFACE_TOGGLE_REALTIME_GOURAUD
     };
@@ -1024,7 +1438,7 @@ bool handleSurfaceCommand(HWND parent, int controlId)
     switch (controlId)
     {
         case IDC_SURFACE_DOUBLE_SIDED: operation = SURFACE_TOGGLE_DOUBLE_SIDED; break;
-        case IDC_SURFACE_UV_DIRECTION: operation = SURFACE_TOGGLE_UV_DIRECTION; break;
+        case IDC_SURFACE_ENVIRONMENTAL_MAPPING: operation = SURFACE_TOGGLE_ENVIRONMENTAL_MAPPING; break;
         case IDC_SURFACE_MESH: operation = SURFACE_TOGGLE_MESH; break;
         case IDC_SURFACE_GOURAUD: operation = SURFACE_TOGGLE_GOURAUD; break;
         case IDC_SURFACE_LIGHT: operation = SURFACE_TOGGLE_LIGHT; break;
@@ -1037,10 +1451,18 @@ bool handleSurfaceCommand(HWND parent, int controlId)
         case IDC_SURFACE_SORT: operation = SURFACE_CYCLE_SORTING; break;
         default: return false;
     }
+    const uint32_t previousRevision = surfaceEditRevision();
     if (controlId >= IDC_SURFACE_DOUBLE_SIDED && controlId <= IDC_SURFACE_REALTIME_GOURAUD)
         setSelectedSurfaceOption(currentModel, operation, selectedSurfaceOptionState(currentModel, operation) != 1);
     else
         editSelectedSurface(currentModel, operation);
+    if (surfaceEditRevision() != previousRevision && !skinVariants.empty())
+    {
+        if (operation == SURFACE_CYCLE_TEXTURE_FLIP || operation == SURFACE_ROTATE)
+            rebuildSkinVariants(parent);
+        else
+            syncSkinSurfaceAttributes();
+    }
     updateSurfacePanel(parent, currentModel);
     return true;
 }
@@ -1242,6 +1664,168 @@ void releaseModelTextures(animated_model_t * model)
     glDeleteTextures(1, &asciiTextureId);
 }
 
+void destroySkinVariant(SkinVariant * skin, bool destroyAtlas)
+{
+    if (!skin) return;
+    if (glReady && !skin->textureIds.empty())
+        glDeleteTextures(static_cast<GLsizei>(skin->textureIds.size()), skin->textureIds.data());
+    skin->textureIds.clear();
+    destroySkinVariantModel(skin->model);
+    skin->model = NULL;
+    if (destroyAtlas)
+    {
+        delete [] skin->atlas.pixel;
+        skin->atlas.pixel = NULL;
+    }
+}
+
+void clearSkinVariants()
+{
+    for (unsigned int index = 0; index < skinVariants.size(); ++index)
+        destroySkinVariant(&skinVariants[index], true);
+    skinVariants.clear();
+    previewSkinIndex = -1;
+}
+
+bool bakeSkinVariant(SkinVariant * skin, string * error)
+{
+    if (!currentModel || currentModelIsZTP || !useUV)
+    {
+        if (error) *error = "Skin atlases require an OBJ or FBX model loaded with UVs.";
+        return false;
+    }
+    destroySkinVariant(skin, false);
+    skin->model = createSkinVariantModel(currentModel, skin->atlas, error);
+    if (!skin->model) return false;
+    try
+    {
+        skin->textureIds.assign(skin->model->nbTextures, 0);
+        if (glReady) setModelTextures(skin->model, skin->textureIds.data());
+    }
+    catch (const std::bad_alloc &)
+    {
+        if (error) *error = "There is not enough memory to upload the skin textures.";
+        destroySkinVariant(skin, false);
+        return false;
+    }
+    return true;
+}
+
+void rebuildSkinVariants(HWND owner)
+{
+    const int selectedSkin = previewSkinIndex;
+    for (unsigned int index = 0; index < skinVariants.size(); ++index)
+    {
+        string error;
+        if (!bakeSkinVariant(&skinVariants[index], &error))
+        {
+            previewSkinIndex = -1;
+            updateSkinMenu(owner);
+            MessageBoxA(owner, error.c_str(), "Skin regeneration failed", MB_OK | MB_ICONERROR);
+            InvalidateRect(owner, NULL, FALSE);
+            return;
+        }
+    }
+    previewSkinIndex = selectedSkin >= 0 && selectedSkin < static_cast<int>(skinVariants.size()) ?
+        selectedSkin : -1;
+    updateSkinMenu(owner);
+    InvalidateRect(owner, NULL, FALSE);
+}
+
+void syncSkinSurfaceAttributes()
+{
+    if (!currentModel) return;
+    for (unsigned int skinIndex = 0; skinIndex < skinVariants.size(); ++skinIndex)
+    {
+        animated_model_t * variant = skinVariants[skinIndex].model;
+        if (!variant || variant->nbModels != currentModel->nbModels) continue;
+        for (unsigned int mesh = 0; mesh < currentModel->nbModels; ++mesh)
+        {
+            const unsigned int faceCount = MIN(currentModel->model[mesh].nbPolygon,
+                                                variant->model[mesh].nbPolygon);
+            for (unsigned int face = 0; face < faceCount; ++face)
+            {
+                polygon_t & skinPolygon = variant->model[mesh].pltbl[face];
+                const ATTR textureAttributes = skinPolygon.SGL_ATTR;
+                skinPolygon.SGL_ATTR = currentModel->model[mesh].pltbl[face].SGL_ATTR;
+                skinPolygon.SGL_ATTR.texno = textureAttributes.texno;
+                skinPolygon.SGL_ATTR.colno = textureAttributes.colno;
+                skinPolygon.SGL_ATTR.dir = textureAttributes.dir;
+            }
+        }
+    }
+}
+
+void loadSkinAtlas(HWND owner)
+{
+    if (!currentModel) return;
+    if (currentModelIsZTP || !useUV)
+    {
+        MessageBoxA(owner, "Skin atlas generation is available only for OBJ/FBX models loaded with UVs.",
+                    "Skin atlas unavailable", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    char filePath[MAX_PATH] = {};
+    OPENFILENAMEA dialog = {};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrTitle = "Load complete skin atlas";
+    dialog.lpstrFilter = "Texture images (*.tga;*.png)\0*.tga;*.png\0All files (*.*)\0*.*\0\0";
+    dialog.lpstrFile = filePath;
+    dialog.nMaxFile = MAX_PATH;
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetOpenFileNameA(&dialog)) return;
+
+    SkinVariant skinVariant;
+    if (ReadTGAFile("", &skinVariant.atlas, filePath) <= 0 || !skinVariant.atlas.pixel)
+    {
+        delete [] skinVariant.atlas.pixel;
+        skinVariant.atlas.pixel = NULL;
+        MessageBoxA(owner, "Could not load this skin image. Choose a valid TGA or PNG file.",
+                    "Skin load failed", MB_OK | MB_ICONERROR);
+        return;
+    }
+    const uint64_t pixelCount = uint64_t(skinVariant.atlas.width) * skinVariant.atlas.height;
+    if (!skinVariant.atlas.width || !skinVariant.atlas.height || skinVariant.atlas.width > 65535 ||
+        skinVariant.atlas.height > 65535 || pixelCount > 16u * 1024u * 1024u ||
+        (skinVariant.atlas.colorDepth == COL_16 && (pixelCount & 1u)))
+    {
+        delete [] skinVariant.atlas.pixel;
+        skinVariant.atlas.pixel = NULL;
+        MessageBoxA(owner, "The skin atlas dimensions exceed the supported limits.",
+                    "Skin load failed", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    skinVariant.atlas.name = filePath;
+    skinVariant.atlas.textureId = 0;
+    skinVariant.name = filePath;
+    const size_t separator = skinVariant.name.find_last_of("\\/");
+    if (separator != string::npos) skinVariant.name = skinVariant.name.substr(separator + 1);
+    const size_t extension = skinVariant.name.find_last_of('.');
+    if (extension != string::npos) skinVariant.name.resize(extension);
+
+    string error;
+    if (!bakeSkinVariant(&skinVariant, &error))
+    {
+        destroySkinVariant(&skinVariant, true);
+        MessageBoxA(owner, error.c_str(), "Skin generation failed", MB_OK | MB_ICONERROR);
+        return;
+    }
+    try
+    {
+        skinVariants.push_back(skinVariant);
+    }
+    catch (const std::bad_alloc &)
+    {
+        destroySkinVariant(&skinVariant, true);
+        MessageBoxA(owner, "There is not enough memory to add this skin.",
+                    "Skin load failed", MB_OK | MB_ICONERROR);
+        return;
+    }
+    previewSkinIndex = static_cast<int>(skinVariants.size()) - 1;
+    updateSkinMenu(owner);
+    InvalidateRect(owner, NULL, FALSE);
+}
 bool loadModel(const string & folder, const string & fileName, HWND owner, bool isObj = false)
 {
     LoadOptions selectedOptions = loadOptions;
@@ -1259,6 +1843,7 @@ bool loadModel(const string & folder, const string & fileName, HWND owner, bool 
         MessageBoxA(owner, error.c_str(), "Model load failed", MB_OK | MB_ICONERROR);
         return false;
     }
+    clearSkinVariants();
     delete [] skin.pixel;
     skin.pixel = NULL;
     releaseModelTextures(currentModel);
@@ -1274,6 +1859,7 @@ bool loadModel(const string & folder, const string & fileName, HWND owner, bool 
     ztpSavePath.clear();
     convertedModelSavePath.clear();
     updateFileMenu(owner);
+    updateSkinMenu(owner);
     clearSelectedSurfaces();
     setTextures(currentModel);
     for (int player = 0; player < 4; ++player) resetPlayer(&PLAYER[player]);
@@ -1294,6 +1880,7 @@ bool loadZTPModel(const string &path, const string &fileName, HWND owner)
                     MB_OK | MB_ICONERROR);
         return false;
     }
+    clearSkinVariants();
     releaseModelTextures(currentModel);
     deleteModels(currentModel);
     currentModel = nextModel;
@@ -1313,6 +1900,7 @@ bool loadZTPModel(const string &path, const string &fileName, HWND owner)
         ztpBasePose[mesh].assign(currentModel->model[mesh].pntbl,
             currentModel->model[mesh].pntbl + currentModel->model[mesh].nbPoint);
     updateFileMenu(owner);
+    updateSkinMenu(owner);
     USE_SGL = currentModel->sourceSgl;
     fileOutName = fileName.substr(0, fileName.find_last_of('.'));
     if (fileOutName.empty()) fileOutName = "model";
@@ -1326,16 +1914,60 @@ bool loadZTPModel(const string &path, const string &fileName, HWND owner)
     return true;
 }
 
+bool hasBasePoseAsFirstAnimationFrame()
+{
+    if (currentModelIsZTP) return false;
+    if (!currentModelIsObj) return true;
+
+    string fileName = currentFile;
+    const size_t extension = fileName.find_last_of('.');
+    if (extension != string::npos && _stricmp(fileName.substr(extension).c_str(), ".obj") == 0)
+        fileName.resize(extension);
+    const auto endsWith = [&](const char * suffix) {
+        const size_t suffixLength = std::strlen(suffix);
+        return fileName.size() >= suffixLength &&
+            fileName.compare(fileName.size() - suffixLength, suffixLength, suffix) == 0;
+    };
+    return endsWith("_000001") || endsWith("000001") || endsWith("0000");
+}
+
 bool buildAnimationExport(animated_model_t * source, animated_model_t * output,
                           std::vector<std::vector<vertex_t> > * sampledFrames,
                           std::vector<key_frame_t> * frameDescriptors,
                           std::vector<PreviewAnimationRange> * outputAnimations,
+                          std::vector<PreviewAnimationRange> * outputMemoryAnimations,
                           bool filterToAnimations, bool resampleAnimations,
                           string * error)
 {
     *output = *source;
     *outputAnimations = addedAnimations;
-    if (!filterToAnimations || addedAnimations.empty()) return true;
+    *outputMemoryAnimations = addedAnimations;
+    const bool omitBasePoseFrame = filterToAnimations && hasBasePoseAsFirstAnimationFrame();
+    const unsigned int firstAnimationFrame = omitBasePoseFrame ? 1u : 0u;
+    if (omitBasePoseFrame)
+        for (unsigned int index = 0; index < addedAnimations.size(); ++index)
+        {
+            PreviewAnimationRange & memoryAnimation = (*outputMemoryAnimations)[index];
+            if (memoryAnimation.startFrame < firstAnimationFrame)
+                memoryAnimation.startFrame = firstAnimationFrame;
+            if (memoryAnimation.startFrame > memoryAnimation.endFrame)
+            {
+                memoryAnimation.startFrame = 1;
+                memoryAnimation.endFrame = 0;
+                (*outputAnimations)[index].startFrame = 1;
+                (*outputAnimations)[index].endFrame = 0;
+            }
+        }
+    if (!filterToAnimations) return true;
+    if (addedAnimations.empty())
+    {
+        if (omitBasePoseFrame)
+        {
+            output->nbFrames = 0;
+            output->keyFrames = NULL;
+        }
+        return true;
+    }
 
     std::vector<unsigned int> ordered(addedAnimations.size());
     for (unsigned int index = 0; index < ordered.size(); ++index) ordered[index] = index;
@@ -1378,7 +2010,8 @@ bool buildAnimationExport(animated_model_t * source, animated_model_t * output,
     {
         std::vector<bool> included(source->nbFrames, false);
         for (const PreviewAnimationRange & animation : addedAnimations)
-            for (unsigned int frame = animation.startFrame; frame <= animation.endFrame; ++frame)
+            for (unsigned int frame = MAX(animation.startFrame, firstAnimationFrame);
+                 frame <= animation.endFrame; ++frame)
                 included[frame] = true;
         std::vector<unsigned int> remap(source->nbFrames, 0xFFFFFFFFu);
         for (unsigned int frame = 0; frame < included.size(); ++frame)
@@ -1390,7 +2023,14 @@ bool buildAnimationExport(animated_model_t * source, animated_model_t * output,
         for (unsigned int index = 0; index < outputAnimations->size(); ++index)
         {
             PreviewAnimationRange & animation = (*outputAnimations)[index];
-            animation.startFrame = remap[animation.startFrame];
+            const unsigned int firstFrame = MAX(addedAnimations[index].startFrame, firstAnimationFrame);
+            if (firstFrame > addedAnimations[index].endFrame)
+            {
+                animation.startFrame = 1;
+                animation.endFrame = 0;
+                continue;
+            }
+            animation.startFrame = remap[firstFrame];
             animation.endFrame = remap[animation.endFrame];
             animation.frameDelta = animation.storedDelta;
         }
@@ -1401,8 +2041,15 @@ bool buildAnimationExport(animated_model_t * source, animated_model_t * output,
         {
             const unsigned int animationIndex = ordered[orderedIndex];
             const PreviewAnimationRange & animation = addedAnimations[animationIndex];
+            const unsigned int firstFrame = MAX(animation.startFrame, firstAnimationFrame);
+            if (firstFrame > animation.endFrame)
+            {
+                mappedStarts[animationIndex] = 1;
+                mappedEnds[animationIndex] = 0;
+                continue;
+            }
             mappedStarts[animationIndex] = static_cast<unsigned int>(samples.size());
-            if (!appendAnimationFrameSamples(animation.startFrame, animation.endFrame,
+            if (!appendAnimationFrameSamples(firstFrame, animation.endFrame,
                                              animation.storedDelta, animation.frameDelta,
                                              &samples))
             {
@@ -1427,6 +2074,12 @@ bool buildAnimationExport(animated_model_t * source, animated_model_t * output,
     if (samples.size() > ZTP_MAX_ANIMATION_FRAMES ||
         samples.size() == 0)
     {
+        if (samples.empty() && omitBasePoseFrame)
+        {
+            output->nbFrames = 0;
+            output->keyFrames = NULL;
+            return true;
+        }
         *error = "Animation export contains no frames or exceeds the ZTP frame limit.";
         return false;
     }
@@ -1502,6 +2155,77 @@ bool isProtectedReferencePath(const string & path)
     return false;
 }
 
+void exportSkinVariant(HWND owner)
+{
+    if (!currentModel || previewSkinIndex < 0 ||
+        previewSkinIndex >= static_cast<int>(skinVariants.size())) return;
+    SkinVariant & skinVariant = skinVariants[previewSkinIndex];
+    if (!skinVariant.model) return;
+
+    string basePath = convertedModelSavePath;
+    if (basePath.empty())
+    {
+        CreateDirectoryA("OUT", NULL);
+        const string baseName = fileOutName.empty() ? string("model") : fileOutName;
+        basePath = "OUT\\" + baseName + ".ZTP";
+    }
+    const size_t separator = basePath.find_last_of("\\/");
+    const string directory = separator == string::npos ? string() : basePath.substr(0, separator + 1);
+    string baseName = separator == string::npos ? basePath : basePath.substr(separator + 1);
+    const size_t extension = baseName.find_last_of('.');
+    if (extension != string::npos) baseName.resize(extension);
+    const string suggestedPath = directory + baseName + "_skin" +
+        std::to_string(previewSkinIndex + 1) + ".ZTP";
+
+    char filePath[MAX_PATH] = {};
+    if (suggestedPath.size() >= sizeof(filePath))
+    {
+        MessageBoxA(owner, "The suggested skin output path is too long. Use a shorter model name or output folder.",
+                    "Skin export failed", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    std::memcpy(filePath, suggestedPath.c_str(), suggestedPath.size() + 1);
+    OPENFILENAMEA dialog = {};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrTitle = "Export skin model without animations";
+    dialog.lpstrFilter = "ZTP files (*.ztp)\0*.ztp\0\0";
+    dialog.lpstrFile = filePath;
+    dialog.nMaxFile = MAX_PATH;
+    dialog.lpstrDefExt = "ZTP";
+    dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetSaveFileNameA(&dialog)) return;
+
+    const string destination = absoluteModelPath(filePath);
+    if (isProtectedReferencePath(destination))
+    {
+        MessageBoxA(owner, "This file is loaded as a visual reference and cannot be overwritten.",
+                    "Protected reference", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    if (!basePath.empty() && _stricmp(destination.c_str(), absoluteModelPath(basePath).c_str()) == 0)
+    {
+        MessageBoxA(owner, "The skin export must use a different filename from the base model.",
+                    "Choose another filename", MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    if (!saveZTPFileWithoutAnimations(destination, skinVariant.model))
+    {
+        MessageBoxA(owner, "Could not export the skin model. Check the destination and write permissions.",
+                    "Skin export failed", MB_OK | MB_ICONERROR);
+        return;
+    }
+    const std::vector<PreviewAnimationRange> noAnimations;
+    if (!writeAnimationSidecar(destination + ".animations.txt", noAnimations, noAnimations))
+    {
+        MessageBoxA(owner, "The skin model was saved without animations, but an old animation sidecar could not be removed.",
+                    "Animation metadata cleanup failed", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    MessageBoxA(owner, "The skin model was exported without animation frames. Its mesh and point indexes match the base model.",
+                "Skin export complete", MB_OK | MB_ICONINFORMATION);
+}
 bool saveCurrentZTP(HWND owner, bool saveAs)
 {
     if (!currentModel || !currentModelIsZTP) return false;
@@ -1540,9 +2264,11 @@ bool saveCurrentZTP(HWND owner, bool saveAs)
     std::vector<std::vector<vertex_t> > sampledFrames;
     std::vector<key_frame_t> frameDescriptors;
     std::vector<PreviewAnimationRange> outputAnimations;
+    std::vector<PreviewAnimationRange> outputMemoryAnimations;
     string exportError;
     if (!buildAnimationExport(currentModel, &modelToSave, &sampledFrames,
-                              &frameDescriptors, &outputAnimations, exportReducedCopy,
+                              &frameDescriptors, &outputAnimations, &outputMemoryAnimations,
+                              exportReducedCopy,
                               exportReducedCopy, &exportError))
     {
         MessageBoxA(owner, exportError.c_str(), "Animation export failed", MB_OK | MB_ICONWARNING);
@@ -1558,7 +2284,8 @@ bool saveCurrentZTP(HWND owner, bool saveAs)
                     "Save failed", MB_OK | MB_ICONERROR);
         return false;
     }
-    if (!writeAnimationSidecar(destination + ".animations.txt", outputAnimations))
+    if (!writeAnimationSidecar(destination + ".animations.txt", outputAnimations,
+                               outputMemoryAnimations))
         MessageBoxA(owner, "The ZTP file was saved, but its animation companion sidecar could not be written. Reduced animations require this metadata.",
                     "Animation metadata save failed", MB_OK | MB_ICONERROR);
     if (exportReducedCopy)
@@ -1642,9 +2369,10 @@ bool saveConvertedModel(HWND owner, bool saveAs)
     std::vector<std::vector<vertex_t> > sampledFrames;
     std::vector<key_frame_t> frameDescriptors;
     std::vector<PreviewAnimationRange> outputAnimations;
+    std::vector<PreviewAnimationRange> outputMemoryAnimations;
     string exportError;
     if (!buildAnimationExport(currentModel, &modelToSave, &sampledFrames,
-                              &frameDescriptors, &outputAnimations, true,
+                              &frameDescriptors, &outputAnimations, &outputMemoryAnimations, true,
                               experimentalAnimationResampling, &exportError))
     {
         MessageBoxA(owner, exportError.c_str(), "Animation export failed", MB_OK | MB_ICONWARNING);
@@ -1656,7 +2384,8 @@ bool saveConvertedModel(HWND owner, bool saveAs)
                     "Save failed", MB_OK | MB_ICONERROR);
         return false;
     }
-    if (!writeAnimationSidecar(destination + ".animations.txt", outputAnimations))
+    if (!writeAnimationSidecar(destination + ".animations.txt", outputAnimations,
+                               outputMemoryAnimations))
         MessageBoxA(owner, "The ZTP file was saved, but its animation companion sidecar could not be written. Reduced animations require this metadata.",
                     "Animation metadata save failed", MB_OK | MB_ICONERROR);
     convertedModelSavePath = destination;
@@ -1854,6 +2583,14 @@ HMENU createMainMenu()
     AppendMenuA(fileMenu, MF_SEPARATOR, 0, NULL);
     AppendMenuA(fileMenu, MF_STRING, IDM_FILE_EXIT, "Exit");
     AppendMenuA(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(fileMenu), "File");
+    HMENU skinMenu = CreatePopupMenu();
+    AppendMenuA(skinMenu, MF_STRING | MF_GRAYED, IDM_SKIN_LOAD, "Load skin atlas (OBJ/FBX)...");
+    AppendMenuA(skinMenu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(skinMenu, MF_STRING | MF_GRAYED, IDM_SKIN_PREVIEW_BASE, "Preview base model");
+    AppendMenuA(skinMenu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(skinMenu, MF_STRING | MF_GRAYED, IDM_SKIN_EXPORT, "Export selected skin model...");
+    AppendMenuA(skinMenu, MF_STRING | MF_GRAYED, IDM_SKIN_REMOVE, "Remove selected skin");
+    AppendMenuA(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(skinMenu), "Skins");
     HMENU optionsMenu = CreatePopupMenu();
     AppendMenuA(optionsMenu, MF_STRING, IDM_OPTIONS, "Configure and reload...");
     AppendMenuA(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(optionsMenu), "Options");
@@ -1915,7 +2652,6 @@ BOOL bQuit = FALSE;
 extern void                     initOpenGL();
 extern animated_model_t *       loading(string line);
 extern void                     setTextures(animated_model_t * model);
-extern int                      render(animated_model_t * aModel, animated_model_t * comparison, const unsigned int * comparisonTextures);
 extern void                     calcLight(animated_model_t*);
 
 WNDCLASSEX wcex;
@@ -1955,7 +2691,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     hwnd = CreateWindowExA(0, "ZTP_CONVERTER", "ZTP Converter",
                            WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_OVERLAPPEDWINDOW,
-                           64, 64, 1360, 800, NULL, createMainMenu(), hInstance, NULL);
+                           64, 64, 1360, 1024, NULL, createMainMenu(), hInstance, NULL);
     if (!hwnd) return 0;
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
@@ -1972,7 +2708,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         float scale = 1.0f;
         int useUv = 0;
         unsigned int specialOptions = 0;
-        uint32_t maxTextureWidth = 1024;
+        uint32_t maxTextureWidth = 512;
         uint32_t maxTextureHeight = 256;
         arguments >> frameCount >> sglMode >> scale >> useUv >> specialOptions;
         string ignoredArgument;
@@ -2037,7 +2773,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             const bool textInputActive = focusedControl == GetDlgItem(hwnd, IDC_ANIMATION_NAME) ||
                 focusedControl == GetDlgItem(hwnd, IDC_ANIMATION_START) ||
                 focusedControl == GetDlgItem(hwnd, IDC_ANIMATION_END) ||
-                focusedControl == GetDlgItem(hwnd, IDC_ANIMATION_LOOP);
+                focusedControl == GetDlgItem(hwnd, IDC_ANIMATION_LOOP) ||
+                focusedControl == GetDlgItem(hwnd, IDC_SURFACE_TEXTURE_SIZE);
             if (GetForegroundWindow() == hwnd && !textInputActive &&
                 myControls(&PLAYER[0], currentModel) == -1)
             {
@@ -2055,7 +2792,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             PLAYER[0].POSITION[Z] = PLAYER[0].NEXT_POSITION[Z];
             if (DisplayTEST==0) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
             else glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-            render(currentModel, comparisonModel, comparisonTextureIds.data());
+            animated_model_t * previewModel = currentModel;
+            const unsigned int * previewTextureIds = texId;
+            if (previewSkinIndex >= 0 && previewSkinIndex < static_cast<int>(skinVariants.size()) &&
+                skinVariants[previewSkinIndex].model)
+            {
+                previewModel = skinVariants[previewSkinIndex].model;
+                previewTextureIds = skinVariants[previewSkinIndex].textureIds.data();
+            }
+            render(previewModel, comparisonModel, comparisonTextureIds.data(), previewTextureIds);
             glPopMatrix();
             renderText(currentModel);
         }
@@ -2117,6 +2862,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             std::vector<std::vector<vertex_t> > sampledFrames;
             std::vector<key_frame_t> exportFrames;
             std::vector<PreviewAnimationRange> outputAnimations;
+            std::vector<PreviewAnimationRange> outputMemoryAnimations;
             string animationError;
             if (!written)
                 cout << "\nERROR WHILE OPENING TEMPORARY BINARY FILE!\n";
@@ -2124,7 +2870,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             {
                 animated_model_t exportModel = {};
                 if (!buildAnimationExport(currentModel, &exportModel, &sampledFrames,
-                                          &exportFrames, &outputAnimations, true,
+                                          &exportFrames, &outputAnimations, &outputMemoryAnimations, true,
                                           experimentalAnimationResampling, &animationError))
                 {
                     binFile.close();
@@ -2143,7 +2889,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             if (written && MoveFileExA(temporaryPath, binaryFileName.c_str(),
                 MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
             {
-                if (!writeAnimationSidecar(binaryFileName + ".animations.txt", outputAnimations))
+                if (!writeAnimationSidecar(binaryFileName + ".animations.txt", outputAnimations,
+                                           outputMemoryAnimations))
                     MessageBoxA(hwnd, "The ZTP file was exported, but its animation companion sidecar could not be written. Reduced animations require this metadata.",
                                 "Animation metadata export failed", MB_OK | MB_ICONERROR);
                 cout << "Writing debug text file...\n";
@@ -2165,6 +2912,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     /* shutdown OpenGL */
     removeComparison(hwnd);
     resetAutomaticLod();
+    clearSkinVariants();
     releaseModelTextures(currentModel);
     deleteModels(currentModel);
     DisableOpenGL(hwnd, hDC, hRC);
@@ -2237,6 +2985,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         break;
 
         case WM_DESTROY:
+            if (surfaceTexturePreviewBitmap)
+            {
+                DeleteObject(surfaceTexturePreviewBitmap);
+                surfaceTexturePreviewBitmap = NULL;
+            }
             return 0;
 
         case WM_KEYDOWN:
@@ -2270,6 +3023,37 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
 
         case WM_COMMAND:
+        {
+            if (LOWORD(wParam) == IDC_SURFACE_TEXTURE_APPLY && HIWORD(wParam) == BN_CLICKED)
+            {
+                const LRESULT selectedSize = SendDlgItemMessageA(hwnd, IDC_SURFACE_TEXTURE_SIZE,
+                                                                   CB_GETCURSEL, 0, 0);
+                if (selectedSize < 0 ||
+                    static_cast<size_t>(selectedSize) >=
+                        sizeof(surfaceTextureSizeOptions) / sizeof(surfaceTextureSizeOptions[0]))
+                {
+                    MessageBoxA(hwnd, "Choose a maximum texture dimension first.",
+                                "Texture resize", MB_OK | MB_ICONWARNING);
+                    return 0;
+                }
+                const unsigned int previousTextureCount = currentModel ? currentModel->nbTextures : 0;
+                bool changed = false;
+                string error;
+                if (!resizeActiveSurfaceTexture(surfaceTextureSizeOptions[selectedSize], &changed, &error))
+                    MessageBoxA(hwnd, error.c_str(), "Texture resize failed", MB_OK | MB_ICONWARNING);
+                else if (changed)
+                {
+                    refreshModelTextures(currentModel, previousTextureCount);
+                    if (currentModelIsZTP) ztpSaved = false;
+                    const LRESULT selectedLod = SendDlgItemMessageA(hwnd, IDC_LOD_LEVEL,
+                                                                    CB_GETCURSEL, 0, 0);
+                    refreshLodStatus(hwnd, selectedLod > 0 ?
+                        static_cast<unsigned int>(selectedLod) : 0);
+                }
+                updateSurfacePanel(hwnd, currentModel);
+                SetFocus(hwnd);
+                return 0;
+            }
             if (HIWORD(wParam) == CBN_SELCHANGE)
             {
                 int controlId = LOWORD(wParam);
@@ -2380,8 +3164,46 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 SetFocus(hwnd);
                 return 0;
             }
+            const unsigned int commandId = LOWORD(wParam);
+            if (commandId >= IDM_SKIN_PREVIEW_FIRST &&
+                commandId < IDM_SKIN_PREVIEW_FIRST + skinVariants.size())
+            {
+                const unsigned int skinIndex = commandId - IDM_SKIN_PREVIEW_FIRST;
+                if (skinIndex < skinVariants.size() && skinVariants[skinIndex].model)
+                {
+                    previewSkinIndex = static_cast<int>(skinIndex);
+                    updateSkinMenu(hwnd);
+                    InvalidateRect(hwnd, NULL, FALSE);
+                }
+                return 0;
+            }
             switch (LOWORD(wParam))
             {
+                case IDM_SKIN_LOAD:
+                    loadSkinAtlas(hwnd);
+                    SetFocus(hwnd);
+                    return 0;
+                case IDM_SKIN_PREVIEW_BASE:
+                    previewSkinIndex = -1;
+                    updateSkinMenu(hwnd);
+                    InvalidateRect(hwnd, NULL, FALSE);
+                    return 0;
+                case IDM_SKIN_EXPORT:
+                    exportSkinVariant(hwnd);
+                    SetFocus(hwnd);
+                    return 0;
+                case IDM_SKIN_REMOVE:
+                    if (previewSkinIndex >= 0 &&
+                        previewSkinIndex < static_cast<int>(skinVariants.size()))
+                    {
+                        destroySkinVariant(&skinVariants[previewSkinIndex], true);
+                        skinVariants.erase(skinVariants.begin() + previewSkinIndex);
+                        previewSkinIndex = -1;
+                    }
+                    updateSkinMenu(hwnd);
+                    InvalidateRect(hwnd, NULL, FALSE);
+                    SetFocus(hwnd);
+                    return 0;
                 case IDM_FILE_OPEN:
                 case IDC_OPEN_ANOTHER:
                     openModelDialog(hwnd);
@@ -2476,7 +3298,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                                     else ztpBasePose[mesh].clear();
                                 }
                             }
-                            if (generated) calcLight(currentModel);
+                            if (generated)
+                            {
+                                calcLight(currentModel);
+                                if (!skinVariants.empty()) rebuildSkinVariants(hwnd);
+                            }
                         }
                         resetSelfShadowing();
                         unsigned int selected = 0;
@@ -2524,6 +3350,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                             resetSelfShadowing();
                             refreshLodControls(hwnd);
                             clearSelectedSurfaces();
+                            if (!skinVariants.empty()) rebuildSkinVariants(hwnd);
                         }
                         else MessageBoxA(hwnd, "No compatible triangle pairs were found.", "Convert tris to quads",
                                          MB_OK | MB_ICONINFORMATION);
@@ -2545,6 +3372,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             if (HIWORD(wParam) == BN_CLICKED && handleSurfaceCommand(hwnd, LOWORD(wParam)))
                 return 0;
             break;
+        }
 
         default:
             return DefWindowProc(hwnd, uMsg, wParam, lParam);

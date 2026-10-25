@@ -324,7 +324,8 @@ static void renderProjectedGrid(const projected_grid::Vertex * corners, int widt
     glMatrixMode(GL_MODELVIEW);
 }
 
-int render(animated_model_t * aModel, animated_model_t * comparison, const unsigned int * comparisonTextures)
+int render(animated_model_t * aModel, animated_model_t * comparison,
+           const unsigned int * comparisonTextures, const unsigned int * modelTextures)
 {
             float sourcePosition[3], markerRadius;
             getLightSourcePosition(aModel, sourcePosition, &markerRadius);
@@ -407,7 +408,8 @@ int render(animated_model_t * aModel, animated_model_t * comparison, const unsig
                 const bool reference = m >= aModel->nbModels;
                 if (!reference && showAutomaticLod) continue;
                 const animated_model_t * source = reference ? comparison : aModel;
-                const unsigned int * textureIds = reference ? comparisonTextures : texId;
+                const unsigned int * textureIds = reference ? comparisonTextures :
+                    (modelTextures ? modelTextures : texId);
                 model_t * curModel = &scene.model[m];
                 vertex_t * curVert;
                 for (unsigned int i=0; i<curModel->nbPolygon; i++)
@@ -509,14 +511,14 @@ float textVert[] = {
     0, textVertValue,
 };
 
-float drawText(char * ptr, float x, float y){
+float drawText(const char * ptr, float x, float y){
     unsigned int t;
     float posX = -1 + textVertValue + x*textVertValue;
     float posY = 1 - textVertValue - y*textVertValue;
     while (*ptr)
     {
         t = (unsigned int)*ptr;
-        if (t=='\n' || t=='\r\n') {
+        if (t=='\n' || t=='\r') {
             ptr++;
             posX = -1 + textVertValue + x*textVertValue;
             posY -= textVertValue;

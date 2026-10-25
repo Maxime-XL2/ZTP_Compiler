@@ -1,4 +1,5 @@
 #include "../COMMON.H"
+#include <vector>
 
 
 void initOpenGL(void)
@@ -102,8 +103,8 @@ void setModelTextures(animated_model_t * aModel, unsigned int * textureIds)
         glBindTexture(GL_TEXTURE_2D, textureIds[i]);
         texture_t * txt = &aModel->texture[i];
 
-        GLubyte imgData[txt->width*txt->height*4]={0};
-        unsigned int cnt=0;
+        std::vector<GLubyte> imgData(static_cast<size_t>(txt->width) * txt->height * 4, 0);
+        size_t cnt=0;
 
         for (unsigned int ii=0; ii<txt->height; ii++)
         {
@@ -120,7 +121,7 @@ void setModelTextures(animated_model_t * aModel, unsigned int * textureIds)
         glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, txt->width, txt->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, (void*)imgData);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, txt->width, txt->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, imgData.data());
     }
 
 }

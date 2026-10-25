@@ -5,6 +5,10 @@
 The FBX importer samples the longest-duration animation stack at the source
 frame rate, deriving the frame count from the clip duration. Mesh topology must
 remain fixed across those samples.
+If an FBX has blend shapes but no animation duration, the importer generates a
+looping sequence with one frame per channel's target shape, applying one shape
+at full weight per frame. This automatic sequence is currently supported for
+unskinned meshes; authored FBX animations continue to be sampled as before.
 Triangles and quads are preserved; larger polygons are triangulated. UVs are
 retained on face corners, and diffuse material colors and external PNG/TGA
 textures are passed through the existing texture pipeline. Embedded textures
@@ -113,6 +117,15 @@ indices are retained for the base mesh and every animation frame. Unused source
 textures are omitted from the saved file, while the current base and all LODs
 are retained.
 OBJ imports retain their existing `OUT/` export directory.
+
+The Skins menu accepts multiple complete TGA/PNG atlases for OBJ/FBX models
+loaded with UVs. Each atlas is cut for every polygon using the same UV-driven
+texture-generation pipeline as the base model. Preview switches between the
+base model and each complete skin; export writes a separate ZTP model without
+animation frames, retaining matching mesh/point indexes for external animation
+linking. Skins are not available when loading ZTP directly because its faces do
+not retain source UV coordinates. Atlas variants are regenerated after
+geometry/topology edits.
 
 Run the focused reader/writer tests from the workspace root in PowerShell:
 

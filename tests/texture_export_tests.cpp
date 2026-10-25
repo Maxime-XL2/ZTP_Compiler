@@ -64,6 +64,68 @@ static void checkExport(animated_model_t & model, const string & path, bool pres
     std::remove(path.c_str());
 }
 
+static void destroyLoadedModel(animated_model_t * model)
+{
+    if (!model) return;
+    delete model->lodData;
+    for (unsigned int mesh = 0; mesh < model->nbModels; ++mesh)
+    {
+        delete [] model->model[mesh].pltbl;
+        delete [] model->model[mesh].pntbl;
+    }
+    for (unsigned int frame = 0; frame < model->nbFrames; ++frame)
+        delete [] model->keyFrames[frame].cVert;
+    for (unsigned int texture = 0; texture < model->nbTextures; ++texture)
+        delete [] model->texture[texture].pixel;
+    delete [] model->keyFrames;
+    delete [] model->model;
+    delete [] model->texture;
+    delete model;
+}
+
+static void checkSkinVariant(animated_model_t & model, const texture_t & atlas, const string & path)
+{
+    string error;
+    animated_model_t animatedSource = model;
+    key_frame_t animationFrame = {};
+    animationFrame.cVert = model.model[0].pntbl;
+    animatedSource.nbFrames = 1;
+    animatedSource.keyFrames = &animationFrame;
+    animated_model_t * variant = createSkinVariantModel(&animatedSource, atlas, &error);
+    assert(variant && error.empty());
+    assert(variant->nbFrames == animatedSource.nbFrames);
+    assert(variant->keyFrames == animatedSource.keyFrames);
+    assert(variant->nbModels == model.nbModels);
+    assert(variant->nbTextures > 0);
+    for (unsigned int mesh = 0; mesh < model.nbModels; ++mesh)
+    {
+        assert(variant->model[mesh].nbPoint == model.model[mesh].nbPoint);
+        assert(variant->model[mesh].pntbl == model.model[mesh].pntbl);
+        assert(variant->model[mesh].nbPolygon == model.model[mesh].nbPolygon);
+        for (unsigned int face = 0; face < model.model[mesh].nbPolygon; ++face)
+        {
+            const polygon_t & basePolygon = model.model[mesh].pltbl[face];
+            const polygon_t & skinPolygon = variant->model[mesh].pltbl[face];
+            assert(skinPolygon.texture >= 0);
+            assert(skinPolygon.texture < static_cast<int>(variant->nbTextures));
+            vector<unsigned int> baseIndices(basePolygon.vertIdx, basePolygon.vertIdx + 4);
+            vector<unsigned int> skinIndices(skinPolygon.vertIdx, skinPolygon.vertIdx + 4);
+            std::sort(baseIndices.begin(), baseIndices.end());
+            std::sort(skinIndices.begin(), skinIndices.end());
+            assert(baseIndices == skinIndices);
+        }
+    }
+
+    assert(saveZTPFileWithoutAnimations(path, variant));
+    animated_model_t * loaded = loadZTPFile(path);
+    assert(loaded && loaded->nbFrames == 0);
+    assert(loaded->nbModels == model.nbModels);
+    assert(loaded->nbTextures == variant->nbTextures);
+    destroyLoadedModel(loaded);
+    std::remove(path.c_str());
+    destroySkinVariantModel(variant);
+}
+
 static size_t countQuadTextureMismatches(const animated_model_t & model, const texture_t & source,
                                          size_t & sampleCount, unsigned int & quadCount)
 {
@@ -206,6 +268,8 @@ int main(int argumentCount, char ** arguments)
     assert(GetTempPathA(MAX_PATH, temporaryFolder));
     assert(GetTempFileNameA(temporaryFolder, "ztp", 0, temporaryPath));
     checkExport(model, temporaryPath, false);
+    assert(!sources.empty());
+    checkSkinVariant(model, sources[0], temporaryPath);
     USE_SGL = 0;
     model.sourceSgl = 0;
     assert(mergeBaseTrianglesIntoQuads(&model));

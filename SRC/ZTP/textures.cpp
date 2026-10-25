@@ -1,7 +1,9 @@
 #include "../COMMON.H"
+#include <new>
 #include <algorithm>
-#include <vector>
 #include <cctype>
+#include <limits>
+#include <vector>
     
 uint32_t maxGeneratedTextureWidth = 512;
 uint32_t maxGeneratedTextureHeight = 256;
@@ -54,22 +56,146 @@ typedef struct
 
 
 /****/
-uint16_t CompressColor(uint16_t color, int compression)
+struct PaletteSample
 {
-    if (color == 0)
-        return 0;
-    else
-        return color & (64478<<(compression));
+    uint16_t color;
+    uint64_t weight;
+};
+
+struct PaletteBox
+{
+    std::vector<size_t> samples;
+};
+
+struct PaletteCentroid
+{
+    double channel[3];
+};
+
+static unsigned int paletteChannel(uint16_t color, unsigned int channel)
+{
+    return (color >> (channel * 5)) & 0x1F;
 }
 
-bool checkSimilarColor(uint16_t color1, uint16_t color2, int maxDistance)
+static uint16_t encodePaletteColor(const PaletteCentroid & centroid)
 {
-    if ((color1&(1<<15)) != (color2 & (1<<15))) return false;
-    int redDifference = (color1 & 0x1F) - (color2 & 0x1F);
-    int greenDifference = ((color1 >> 5) & 0x1F) - ((color2 >> 5) & 0x1F);
-    int blueDifference = ((color1 >> 10) & 0x1F) - ((color2 >> 10) & 0x1F);
-    return redDifference * redDifference + greenDifference * greenDifference + blueDifference * blueDifference
-        <= maxDistance * maxDistance;
+    const unsigned int red = static_cast<unsigned int>(MAX(0, MIN(31, static_cast<int>(centroid.channel[0] + 0.5))));
+    const unsigned int green = static_cast<unsigned int>(MAX(0, MIN(31, static_cast<int>(centroid.channel[1] + 0.5))));
+    const unsigned int blue = static_cast<unsigned int>(MAX(0, MIN(31, static_cast<int>(centroid.channel[2] + 0.5))));
+    return static_cast<uint16_t>(0x8000 | red | (green << 5) | (blue << 10));
+}
+
+static PaletteCentroid paletteBoxCentroid(const PaletteBox & box, const std::vector<PaletteSample> & samples)
+{
+    PaletteCentroid centroid = {};
+    uint64_t totalWeight = 0;
+    for (size_t sampleIndex : box.samples)
+    {
+        const PaletteSample & sample = samples[sampleIndex];
+        totalWeight += sample.weight;
+        for (unsigned int channel = 0; channel < 3; ++channel)
+            centroid.channel[channel] += paletteChannel(sample.color, channel) * static_cast<double>(sample.weight);
+    }
+    if (totalWeight)
+        for (double & channel : centroid.channel) channel /= totalWeight;
+    return centroid;
+}
+
+static std::vector<PaletteCentroid> buildPalette(const std::vector<PaletteSample> & samples, unsigned int colorLimit)
+{
+    std::vector<PaletteBox> boxes(1);
+    boxes[0].samples.resize(samples.size());
+    for (size_t sample = 0; sample < samples.size(); ++sample) boxes[0].samples[sample] = sample;
+
+    while (boxes.size() < colorLimit)
+    {
+        size_t selectedBox = boxes.size();
+        unsigned int selectedChannel = 0;
+        double selectedScore = -1.0;
+        for (size_t boxIndex = 0; boxIndex < boxes.size(); ++boxIndex)
+        {
+            const PaletteBox & box = boxes[boxIndex];
+            if (box.samples.size() < 2) continue;
+            uint64_t totalWeight = 0;
+            for (size_t sampleIndex : box.samples) totalWeight += samples[sampleIndex].weight;
+            for (unsigned int channel = 0; channel < 3; ++channel)
+            {
+                unsigned int minimum = 31, maximum = 0;
+                for (size_t sampleIndex : box.samples)
+                {
+                    const unsigned int value = paletteChannel(samples[sampleIndex].color, channel);
+                    minimum = MIN(minimum, value);
+                    maximum = MAX(maximum, value);
+                }
+                const double score = (maximum - minimum) * std::sqrt(static_cast<double>(totalWeight));
+                if (score > selectedScore)
+                {
+                    selectedScore = score;
+                    selectedBox = boxIndex;
+                    selectedChannel = channel;
+                }
+            }
+        }
+        if (selectedBox == boxes.size()) break;
+
+        PaletteBox & box = boxes[selectedBox];
+        std::sort(box.samples.begin(), box.samples.end(), [&](size_t left, size_t right)
+        {
+            const unsigned int leftValue = paletteChannel(samples[left].color, selectedChannel);
+            const unsigned int rightValue = paletteChannel(samples[right].color, selectedChannel);
+            return leftValue != rightValue ? leftValue < rightValue : samples[left].color < samples[right].color;
+        });
+        uint64_t totalWeight = 0;
+        for (size_t sampleIndex : box.samples) totalWeight += samples[sampleIndex].weight;
+        uint64_t accumulatedWeight = 0;
+        size_t split = 1;
+        for (; split < box.samples.size(); ++split)
+        {
+            accumulatedWeight += samples[box.samples[split - 1]].weight;
+            if (accumulatedWeight * 2 >= totalWeight) break;
+        }
+        split = MIN(split, box.samples.size() - 1);
+        PaletteBox secondBox;
+        secondBox.samples.assign(box.samples.begin() + split, box.samples.end());
+        box.samples.erase(box.samples.begin() + split, box.samples.end());
+        boxes.push_back(std::move(secondBox));
+    }
+
+    std::vector<PaletteCentroid> centroids;
+    for (const PaletteBox & box : boxes) centroids.push_back(paletteBoxCentroid(box, samples));
+
+    for (unsigned int iteration = 0; iteration < 8; ++iteration)
+    {
+        std::vector<PaletteCentroid> sums(centroids.size());
+        std::vector<uint64_t> weights(centroids.size(), 0);
+        for (const PaletteSample & sample : samples)
+        {
+            size_t best = 0;
+            double bestDistance = std::numeric_limits<double>::max();
+            for (size_t candidate = 0; candidate < centroids.size(); ++candidate)
+            {
+                double distance = 0.0;
+                for (unsigned int channel = 0; channel < 3; ++channel)
+                {
+                    const double difference = paletteChannel(sample.color, channel) - centroids[candidate].channel[channel];
+                    distance += difference * difference;
+                }
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    best = candidate;
+                }
+            }
+            weights[best] += sample.weight;
+            for (unsigned int channel = 0; channel < 3; ++channel)
+                sums[best].channel[channel] += paletteChannel(sample.color, channel) * static_cast<double>(sample.weight);
+        }
+        for (size_t candidate = 0; candidate < centroids.size(); ++candidate)
+            if (weights[candidate])
+                for (unsigned int channel = 0; channel < 3; ++channel)
+                    centroids[candidate].channel[channel] = sums[candidate].channel[channel] / weights[candidate];
+    }
+    return centroids;
 }
 
 /**This function fills the current image's palette in a 16 colors palette**/
@@ -84,71 +210,69 @@ int FillPalette(texture_t * texture, int compression)
         texture->colorDepth = COL_32K;
         return 0;
     }
-    for (unsigned int i=0; i<16; i++) texture->clut[i]=0x00;
-    unsigned short total_palette = 0;
-    bool exceededPalette = false;
-    std::vector<uint8_t> colorPaletteIndex(65536, 0xFF);
-
-   // uint16_t tmpPalette[texture->width*texture->height]={0};
-    //First pass to reserve the first palette entry for transparency, only if transparency is used
-    for (unsigned int i=0; i< (unsigned int)(texture->width*texture->height); i++)
+    (void)compression;
+    std::fill(texture->clut, texture->clut + 16, 0);
+    const size_t pixelCount = static_cast<size_t>(texture->width) * texture->height;
+    std::vector<uint64_t> histogram(65536, 0);
+    bool hasTransparency = false;
+    for (size_t pixel = 0; pixel < pixelCount; ++pixel)
     {
-        if (texture->pixel[i].rgb==0)
-        {
-            total_palette=1;
-            texture->clut[0]=0;
-            break;
-        }
+        const uint16_t color = texture->pixel[pixel].rgb;
+        if (color == 0) hasTransparency = true;
+        else ++histogram[color];
     }
 
-    for (unsigned int i=0; i< (unsigned int)(texture->width*texture->height); i++)
-    {
-        const uint16_t color = texture->pixel[i].rgb;
-        uint8_t paletteIndex = colorPaletteIndex[color];
-        if (paletteIndex != 0xFF) {
-            texture->pixel[i].palette_idx = paletteIndex;
-            continue;
-        }
+    std::vector<PaletteSample> samples;
+    for (size_t color = 1; color < histogram.size(); ++color)
+        if (histogram[color]) samples.push_back(PaletteSample{static_cast<uint16_t>(color), histogram[color]});
 
-        if (color == 0) {
-            paletteIndex = 0;
-        } else {
-            for (unsigned short ii=0; ii<total_palette; ii++) {
-                if (checkSimilarColor(color, texture->clut[ii], compression+1)) {
-                    paletteIndex = static_cast<uint8_t>(ii);
-                    break;
-                }
-            }
-
-            if (paletteIndex == 0xFF) {
-                if (total_palette >= 16) {
-                    paletteIndex = 15;
-                    exceededPalette = true;
-                } else {
-                    paletteIndex = static_cast<uint8_t>(total_palette);
-                    texture->clut[total_palette] = color;
-                    total_palette++;
-                }
-            }
-        }
-        colorPaletteIndex[color] = paletteIndex;
-        texture->pixel[i].palette_idx = paletteIndex;
-    }
-    if (exceededPalette)
+    const unsigned int firstColorIndex = hasTransparency ? 1 : 0;
+    const unsigned int colorLimit = 16 - firstColorIndex;
+    std::vector<uint16_t> paletteColors;
+    if (samples.size() <= colorLimit)
     {
-        int compr=compression + 1;
-        cout << "More than 16 colors...reducing the amount of colors...\n";
-        return FillPalette(texture, compr);
+        for (const PaletteSample & sample : samples) paletteColors.push_back(sample.color);
     }
     else
     {
-        texture->colorDepth=COL_16; //4 bpp
-        if (compression >= 0)
-            cout << "The image contains a total of " << total_palette << " colors after compression.\n";
-        else
-            cout << "The image contains a total of " << total_palette << " colors.\n";
-        return 1;
+        const std::vector<PaletteCentroid> centroids = buildPalette(samples, colorLimit);
+        for (const PaletteCentroid & centroid : centroids) paletteColors.push_back(encodePaletteColor(centroid));
     }
+
+    if (hasTransparency) texture->clut[0] = 0;
+    for (size_t color = 0; color < paletteColors.size(); ++color)
+        texture->clut[firstColorIndex + color] = paletteColors[color];
+
+    std::vector<uint8_t> colorPaletteIndex(65536, 0xFF);
+    if (hasTransparency) colorPaletteIndex[0] = 0;
+    for (const PaletteSample & sample : samples)
+    {
+        size_t best = 0;
+        unsigned int bestDistance = UINT_MAX;
+        for (size_t candidate = 0; candidate < paletteColors.size(); ++candidate)
+        {
+            unsigned int distance = 0;
+            for (unsigned int channel = 0; channel < 3; ++channel)
+            {
+                const int difference = static_cast<int>(paletteChannel(sample.color, channel)) -
+                    static_cast<int>(paletteChannel(paletteColors[candidate], channel));
+                distance += difference * difference;
+            }
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                best = candidate;
+            }
+        }
+        colorPaletteIndex[sample.color] = static_cast<uint8_t>(firstColorIndex + best);
+    }
+    for (size_t pixel = 0; pixel < pixelCount; ++pixel)
+        texture->pixel[pixel].palette_idx = colorPaletteIndex[texture->pixel[pixel].rgb];
+
+    texture->colorDepth = COL_16;
+    cout << "The image contains a total of " << paletteColors.size() + firstColorIndex
+         << " colors after " << (samples.size() > colorLimit ? "quantization" : "deduplication") << ".\n";
+    return 1;
 
 }
 
@@ -460,9 +584,13 @@ void  createTexture( polygon_t * pol, animated_model_t * aModel ) {
     createTexture(pol, aModel, skin);
 }
 
-void createTexture(polygon_t * pol, animated_model_t * aModel, const texture_t & sourceTexture) {
-    if (!useUV) return;
-    if (checkExists(pol, aModel, sourceTexture.name)) return;
+static bool createTextureInternal(polygon_t * pol, animated_model_t * aModel,
+                                  const texture_t & sourceTexture, bool reuseExisting,
+                                  unsigned int maxDimension)
+{
+    if (!useUV || !pol || !aModel || !aModel->texture || !sourceTexture.pixel ||
+        !sourceTexture.width || !sourceTexture.height || aModel->nbTextures >= 2048) return false;
+    if (reuseExisting && checkExists(pol, aModel, sourceTexture.name)) return true;
 
     float bbMin[2]={99999, 99999};
     float bbMax[2]={-99999, -99999};
@@ -488,24 +616,48 @@ void createTexture(polygon_t * pol, animated_model_t * aModel, const texture_t &
     }*/
 
 
-    pol->texture = aModel->nbTextures;
-    texture_t * text = &aModel->texture[aModel->nbTextures];
-    aModel->texture[aModel->nbTextures].textureId = aModel->nbTextures;
-    text->name = sourceTexture.name;
     const unsigned int naturalWidth = MAX(((int)(sourceTexture.width * (bbMax[0] - bbMin[0]) + 7) / 8) << 3, 8);
-    const unsigned int widthLimit = MAX(8u, (maxGeneratedTextureWidth / 8) * 8);
-    text->width = MIN(naturalWidth, widthLimit);
-    const unsigned int heightLimit = MIN(maxGeneratedTextureHeight, 256u);
-    if (specialOption & (1 << 1))
+    const unsigned int naturalHeight = specialOption & (1 << 1) ?
+        MAX(((int)(sourceTexture.height * (bbMax[1] - bbMin[1]) + 4) / 8) << 3, 8) :
+        MAX(static_cast<unsigned int>(sourceTexture.height * (bbMax[1] - bbMin[1])), 1u);
+    unsigned int targetWidth = 0;
+    unsigned int targetHeight = 0;
+    if (maxDimension)
     {
-        const unsigned int naturalHeight = MAX(((int)(sourceTexture.height * (bbMax[1] - bbMin[1]) + 4) / 8) << 3, 8);
-        const unsigned int alignedHeightLimit = MAX(8u, (heightLimit / 8) * 8);
-        text->height = MIN(naturalHeight, alignedHeightLimit);
+        const unsigned int naturalMaxDimension = MAX(naturalWidth, naturalHeight);
+        const double scale = MIN(1.0, static_cast<double>(maxDimension) / naturalMaxDimension);
+        targetWidth = MAX(8u, MIN(naturalWidth,
+            (static_cast<unsigned int>(std::lround(naturalWidth * scale)) + 7u) & ~7u));
+        targetHeight = specialOption & (1 << 1) ?
+            MAX(8u, MIN(naturalHeight,
+                (static_cast<unsigned int>(std::lround(naturalHeight * scale)) + 7u) & ~7u)) :
+            MAX(1u, MIN(naturalHeight, static_cast<unsigned int>(std::lround(naturalHeight * scale))));
     }
     else
-        text->height = MIN(MAX(static_cast<unsigned int>(sourceTexture.height * (bbMax[1] - bbMin[1])), 1u),
-                           MAX(heightLimit, 1u));
-    text->pixel = new pixel_t[text->width*text->height]();
+    {
+        const unsigned int widthLimit = MAX(8u, (maxGeneratedTextureWidth / 8) * 8);
+        targetWidth = MIN(naturalWidth, widthLimit);
+        const unsigned int heightLimit = MIN(maxGeneratedTextureHeight, 256u);
+        if (specialOption & (1 << 1))
+        {
+            const unsigned int alignedHeightLimit = MAX(8u, (heightLimit / 8) * 8);
+            targetHeight = MIN(naturalHeight, alignedHeightLimit);
+        }
+        else
+            targetHeight = MIN(naturalHeight, MAX(heightLimit, 1u));
+    }
+    const size_t pixelCount = static_cast<size_t>(targetWidth) * targetHeight;
+    pixel_t * resizedPixels = new (std::nothrow) pixel_t[pixelCount]();
+    if (!resizedPixels) return false;
+
+    const unsigned int textureIndex = aModel->nbTextures;
+    texture_t * text = &aModel->texture[textureIndex];
+    pol->texture = static_cast<int>(textureIndex);
+    text->textureId = textureIndex;
+    text->name = sourceTexture.name;
+    text->width = targetWidth;
+    text->height = targetHeight;
+    text->pixel = resizedPixels;
 
     cout << "Texture width = " << text->width << ", height = " << text->height << "\n";
 
@@ -537,6 +689,7 @@ void createTexture(polygon_t * pol, animated_model_t * aModel, const texture_t &
 
             const pixel_t & sourcePixel = sourceTexture.pixel[uvPos[Y]*sourceTexture.width + uvPos[X]];
             text->pixel[j].rgb = sourcePixel.rgb;
+            text->pixel[j].palette_idx = sourcePixel.palette_idx;
             text->pixel[j].r = sourcePixel.r;
             text->pixel[j].g = sourcePixel.g;
             text->pixel[j].b = sourcePixel.b;
@@ -553,15 +706,14 @@ void createTexture(polygon_t * pol, animated_model_t * aModel, const texture_t &
     extern void specialConditions(unsigned short, unsigned short, animated_model_t*);
     //text->colorDepth=COL_32K;
 
-    #if 0
-    if ((!(specialOption&1)) || text->width*text->height >= 128*128){
-        text->colorDepth=COL_32K;
-    } else {
-        FillPalette(text, -1);
+    if ((specialOption & 1) && sourceTexture.colorDepth == COL_16)
+    {
+        for (unsigned int color = 0; color < 16; ++color)
+            text->clut[color] = sourceTexture.clut[color];
+        text->colorDepth = COL_16;
     }
-    #else
-    FillPalette(text, -1);
-    #endif
+    else
+        FillPalette(text, -1);
     textureSpecialAttributes(text);
 
     cout << "\nTEST..." << aModel->nbTextures << "\n";
@@ -570,9 +722,111 @@ void createTexture(polygon_t * pol, animated_model_t * aModel, const texture_t &
     specialConditions(aModel->nbTextures-1, aModel->nbTextures, aModel);
     pol->SGL_ATTR = aModel->texture[pol->texture].SGL_ATTR;
 
-
     ///delete [] bufText->pixel;
     ///delete bufText;
+    return true;
+}
+
+void createTexture(polygon_t * pol, animated_model_t * aModel, const texture_t & sourceTexture)
+{
+    createTextureInternal(pol, aModel, sourceTexture, true, 0);
+}
+
+bool createTextureAtMaxDimension(polygon_t * polygon, animated_model_t * model,
+                                 const texture_t & sourceTexture, unsigned int maxDimension)
+{
+    if (maxDimension < 8 || maxDimension > 256 || (maxDimension & 7)) return false;
+    return createTextureInternal(polygon, model, sourceTexture, false, maxDimension);
+}
+
+void destroySkinVariantModel(animated_model_t * model)
+{
+    if (!model) return;
+    if (model->model)
+        for (unsigned int mesh = 0; mesh < model->nbModels; ++mesh)
+            delete [] model->model[mesh].pltbl;
+    if (model->texture)
+        for (unsigned int texture = 0; texture < model->nbTextures; ++texture)
+            delete [] model->texture[texture].pixel;
+    delete [] model->model;
+    delete [] model->texture;
+    delete model;
+}
+
+animated_model_t * createSkinVariantModel(const animated_model_t * source, const texture_t & atlas,
+                                          string * error)
+{
+    if (!source || !source->model || !source->nbModels || !atlas.pixel ||
+        !atlas.width || !atlas.height || !useUV)
+    {
+        if (error) *error = "Skin variants require a loaded mesh with UVs and a valid atlas.";
+        return NULL;
+    }
+
+    animated_model_t * variant = new (std::nothrow) animated_model_t();
+    if (!variant)
+    {
+        if (error) *error = "There is not enough memory to create the skin model.";
+        return NULL;
+    }
+    *variant = *source;
+    variant->model = NULL;
+    variant->texture = NULL;
+    variant->nbTextures = 0;
+    variant->model = new (std::nothrow) model_t[source->nbModels]();
+    variant->texture = new (std::nothrow) texture_t[2048]();
+    if (!variant->model || !variant->texture)
+    {
+        if (error) *error = "There is not enough memory to allocate the skin model.";
+        destroySkinVariantModel(variant);
+        return NULL;
+    }
+
+    for (unsigned int mesh = 0; mesh < source->nbModels; ++mesh)
+    {
+        variant->model[mesh] = source->model[mesh];
+        variant->model[mesh].pltbl = NULL;
+        if (source->model[mesh].nbPolygon)
+        {
+            variant->model[mesh].pltbl =
+                new (std::nothrow) polygon_t[source->model[mesh].nbPolygon];
+            if (!variant->model[mesh].pltbl)
+            {
+                if (error) *error = "There is not enough memory to copy the skin model polygons.";
+                destroySkinVariantModel(variant);
+                return NULL;
+            }
+            std::copy(source->model[mesh].pltbl,
+                      source->model[mesh].pltbl + source->model[mesh].nbPolygon,
+                      variant->model[mesh].pltbl);
+        }
+    }
+
+    for (unsigned int mesh = 0; mesh < variant->nbModels; ++mesh)
+        for (unsigned int face = 0; face < variant->model[mesh].nbPolygon; ++face)
+        {
+            polygon_t * polygon = &variant->model[mesh].pltbl[face];
+            const ATTR surfaceAttributes = source->model[mesh].pltbl[face].SGL_ATTR;
+            if (!createTextureInternal(polygon, variant, atlas, true, 0))
+            {
+                if (error) *error = "Could not generate a skin texture for every UV-mapped surface.";
+                destroySkinVariantModel(variant);
+                return NULL;
+            }
+            const ATTR textureAttributes = polygon->SGL_ATTR;
+            polygon->SGL_ATTR = surfaceAttributes;
+            polygon->SGL_ATTR.texno = textureAttributes.texno;
+            polygon->SGL_ATTR.colno = textureAttributes.colno;
+            polygon->SGL_ATTR.dir = textureAttributes.dir;
+        }
+
+    if (!variant->nbTextures)
+    {
+        if (error) *error = "The model has no textured surfaces to generate for this skin.";
+        destroySkinVariantModel(variant);
+        return NULL;
+    }
+    return variant;
 }
 
 #if 0
@@ -645,4 +899,3 @@ int readPNGfile(string folder, texture_t * texture){
     return 1;
 }
 #endif // 0
-

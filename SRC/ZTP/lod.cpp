@@ -1132,6 +1132,22 @@ void discardAutomaticLodSourceTextures(const animated_model_t * model)
         [&](const LodSourceTextureCache & cache) { return cache.owner == model; }), lodSourceTextureCaches.end());
 }
 
+bool getCachedSourceTextureForSurface(const animated_model_t * model, unsigned int meshIndex,
+                                     unsigned int faceIndex, texture_t * sourceTexture)
+{
+    if (!sourceTexture) return false;
+    LodSourceTextureCache * cache = findSourceTextureCache(model);
+    if (!cache || meshIndex >= cache->faces.size() ||
+        faceIndex >= cache->faces[meshIndex].size()) return false;
+    const int textureIndex = cache->faces[meshIndex][faceIndex].texture;
+    if (textureIndex < 0 || textureIndex >= static_cast<int>(cache->textures.size())) return false;
+    CachedSourceTexture & cached = cache->textures[textureIndex];
+    if (cached.pixels.empty() || !cached.texture.width || !cached.texture.height) return false;
+    *sourceTexture = cached.texture;
+    sourceTexture->pixel = cached.pixels.data();
+    return true;
+}
+
 bool generateAutomaticLod(animated_model_t * model, unsigned int reductionPercent, unsigned int replaceLevel)
 {
     if (!model || !model->model || model->nbModels == 0) return false;

@@ -218,7 +218,7 @@ enum surface_edit_operation
 {
     SURFACE_TOGGLE_DOUBLE_SIDED,
     SURFACE_CYCLE_TEXTURE_FLIP,
-    SURFACE_TOGGLE_UV_DIRECTION,
+    SURFACE_TOGGLE_ENVIRONMENTAL_MAPPING,
     SURFACE_ROTATE,
     SURFACE_TOGGLE_MESH,
     SURFACE_TOGGLE_GOURAUD,
@@ -275,6 +275,13 @@ int32_t         swap_endian_sint( int32_t value);
 
 void            createTexture( polygon_t * pol, animated_model_t * aModel);
 void            createTexture( polygon_t * pol, animated_model_t * aModel, const texture_t & sourceTexture);
+bool            createTextureAtMaxDimension(polygon_t * polygon, animated_model_t * model,
+                                             const texture_t & sourceTexture, unsigned int maxDimension);
+animated_model_t * createSkinVariantModel(const animated_model_t * source, const texture_t & atlas,
+                                          string * error);
+void            destroySkinVariantModel(animated_model_t * model);
+bool            getCachedSourceTextureForSurface(const animated_model_t * model, unsigned int meshIndex,
+                                                  unsigned int faceIndex, texture_t * sourceTexture);
 void            renderText(animated_model_t * model);
 bool            editSelectedSurface(animated_model_t * model, surface_edit_operation operation);
 bool            setSelectedSurfaceOption(animated_model_t * model, surface_edit_operation operation, bool enabled);
@@ -288,6 +295,7 @@ unsigned int    selectedSurfaceCount();
 uint32_t        surfaceSelectionRevision();
 uint32_t        surfaceEditRevision();
 bool            saveZTPFile(const string & path, animated_model_t * model);
+bool            saveZTPFileWithoutAnimations(const string & path, animated_model_t * model);
 uint64_t        calculateTextureExportSize(const animated_model_t * model, bool preserveUnusedTextures = false);
 extern uint32_t maxGeneratedTextureWidth;
 extern uint32_t maxGeneratedTextureHeight;

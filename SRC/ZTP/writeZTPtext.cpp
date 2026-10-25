@@ -331,7 +331,7 @@ glEnable(GL_DEPTH_TEST);
 void resetAnimation(animated_model_t * aModel) {
     extern int ZT_FRAMERATE;
     extern player_t PLAYER[];
-    extern ztUpdateAnimation(animationControl_t * animCtrl, animated_model_t * currentModel);
+    extern int ztUpdateAnimation(animationControl_t * animCtrl, animated_model_t * currentModel);
 
     if (aModel->nbFrames>0){
         PLAYER[0].ANIMCTRL.currentFrm=0;

@@ -275,7 +275,7 @@ bool surfaceOptionValue(const polygon_t * polygon, surface_edit_operation operat
     switch (operation)
     {
         case SURFACE_TOGGLE_DOUBLE_SIDED: return (polygon->SGL_ATTR.flag & Dual_Plane) != 0;
-        case SURFACE_TOGGLE_UV_DIRECTION: return (polygon->SGL_ATTR.dir & (1 << 8)) != 0;
+        case SURFACE_TOGGLE_ENVIRONMENTAL_MAPPING: return (polygon->SGL_ATTR.dir & (1 << 8)) != 0;
         case SURFACE_TOGGLE_MESH: return (polygon->SGL_ATTR.atrb & MESHon) != 0;
         case SURFACE_TOGGLE_GOURAUD: return (polygon->SGL_ATTR.atrb & CL_Gouraud) != 0;
         case SURFACE_TOGGLE_LIGHT: return (polygon->SGL_ATTR.sorting & UseLight) != 0;
@@ -308,7 +308,7 @@ bool assignSurfaceOption(polygon_t * polygon, surface_edit_operation operation, 
             if (enabled) polygon->SGL_ATTR.flag |= Dual_Plane;
             else polygon->SGL_ATTR.flag &= static_cast<uint8_t>(~Dual_Plane);
             break;
-        case SURFACE_TOGGLE_UV_DIRECTION: assignBit(polygon->SGL_ATTR.dir, 1 << 8, enabled); break;
+        case SURFACE_TOGGLE_ENVIRONMENTAL_MAPPING: assignBit(polygon->SGL_ATTR.dir, 1 << 8, enabled); break;
         case SURFACE_TOGGLE_MESH: assignBit(polygon->SGL_ATTR.atrb, MESHon, enabled); break;
         case SURFACE_TOGGLE_GOURAUD: assignBit(polygon->SGL_ATTR.atrb, CL_Gouraud, enabled); break;
         case SURFACE_TOGGLE_LIGHT: assignBit(polygon->SGL_ATTR.sorting, UseLight, enabled); break;
@@ -422,7 +422,7 @@ int selectedSurfaceOptionState(animated_model_t * model, surface_edit_operation 
     switch (operation)
     {
         case SURFACE_TOGGLE_DOUBLE_SIDED:
-        case SURFACE_TOGGLE_UV_DIRECTION:
+        case SURFACE_TOGGLE_ENVIRONMENTAL_MAPPING:
         case SURFACE_TOGGLE_MESH:
         case SURFACE_TOGGLE_GOURAUD:
         case SURFACE_TOGGLE_LIGHT:
@@ -566,7 +566,7 @@ int keyboard_controls(player_t * player, animated_model_t * model)
 
     if (m_keys['C'].bPressed) editSelectedSurface(model, SURFACE_TOGGLE_DOUBLE_SIDED);
     if (m_keys['F'].bPressed) editSelectedSurface(model, SURFACE_CYCLE_TEXTURE_FLIP);
-    if (m_keys['G'].bPressed) editSelectedSurface(model, SURFACE_TOGGLE_UV_DIRECTION);
+    if (m_keys['G'].bPressed) editSelectedSurface(model, SURFACE_TOGGLE_ENVIRONMENTAL_MAPPING);
     if (m_keys['R'].bPressed) editSelectedSurface(model, SURFACE_ROTATE);
     if (m_keys['M'].bPressed) editSelectedSurface(model, SURFACE_TOGGLE_MESH);
     if (m_keys['H'].bPressed) editSelectedSurface(model, SURFACE_TOGGLE_GOURAUD);

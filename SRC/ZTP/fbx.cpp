@@ -72,6 +72,12 @@ struct FbxSkeletonData
     std::vector<std::array<int32_t, 12> > animationMatrices;
 };
 
+struct FbxBlendShapeFrame
+{
+    size_t meshIndex = 0;
+    const ufbx_blend_shape *shape = NULL;
+};
+
 std::vector<BonePreviewData> bonePreviewData;
 std::vector<FbxSkeletonData> fbxSkeletonData;
 
@@ -818,15 +824,6 @@ bool loadFBX(const string &filePath, float *scaleFactor, animated_model_t *model
         return false;
     }
     const unsigned int frameRate = MAX(1u, static_cast<unsigned int>(std::floor(sourceFrameRate + 0.5)));
-    const double requestedFrames = duration > 0.0 ? std::ceil(duration * frameRate) + 1.0 : 1.0;
-    const unsigned int frameCount = static_cast<unsigned int>(MIN(
-        requestedFrames, static_cast<double>(ZTP_MAX_ANIMATION_FRAMES)));
-    if (requestedFrames > ZTP_MAX_ANIMATION_FRAMES)
-        cout << "FBX animation requires " << requestedFrames << " frames; sampling at "
-             << frameCount << " frames to respect the limit.\n";
-    model->nbFrames = frameCount;
-    model->framerate = frameRate;
-    model->keyFrames = new key_frame_t[frameCount]();
 
     ufbx_evaluate_opts evaluateOptions = {};
     evaluateOptions.evaluate_skinning = true;
@@ -849,6 +846,39 @@ bool loadFBX(const string &filePath, float *scaleFactor, animated_model_t *model
         meshNodes.push_back(nodeIndex);
         totalPoints += node->mesh->num_vertices;
     }
+
+    std::vector<FbxBlendShapeFrame> blendShapeFrames;
+    if (duration == 0.0)
+        for (size_t meshIndex = 0; meshIndex < meshNodes.size(); ++meshIndex)
+        {
+            const ufbx_mesh *mesh = basePose->nodes.data[meshNodes[meshIndex]]->mesh;
+            for (size_t deformerIndex = 0; deformerIndex < mesh->blend_deformers.count; ++deformerIndex)
+            {
+                const ufbx_blend_deformer *deformer = mesh->blend_deformers.data[deformerIndex];
+                for (size_t channelIndex = 0; channelIndex < deformer->channels.count; ++channelIndex)
+                {
+                    const ufbx_blend_channel *channel = deformer->channels.data[channelIndex];
+                    if (channel->target_shape)
+                        blendShapeFrames.push_back({meshIndex, channel->target_shape});
+                }
+            }
+        }
+
+    const bool generateBlendShapeAnimation = duration == 0.0 && !blendShapeFrames.empty();
+    const double requestedFrames = generateBlendShapeAnimation ? blendShapeFrames.size() :
+        (duration > 0.0 ? std::ceil(duration * frameRate) + 1.0 : 1.0);
+    const unsigned int frameCount = static_cast<unsigned int>(MIN(
+        requestedFrames, static_cast<double>(ZTP_MAX_ANIMATION_FRAMES)));
+    if (generateBlendShapeAnimation)
+        cout << "Generating FBX animation from " << frameCount << " blend shapes at "
+             << frameRate << " fps.\n";
+    else if (requestedFrames > ZTP_MAX_ANIMATION_FRAMES)
+        cout << "FBX animation requires " << requestedFrames << " frames; sampling at "
+             << frameCount << " frames to respect the limit.\n";
+    model->nbFrames = frameCount;
+    model->framerate = frameRate;
+    model->keyFrames = new key_frame_t[frameCount]();
+
     if (meshNodes.empty() || !totalPoints || uint64_t(totalPoints) * frameCount > 4u * 1024u * 1024u)
         return false;
 
@@ -1236,6 +1266,20 @@ bool loadFBX(const string &filePath, float *scaleFactor, animated_model_t *model
                 ufbx_vec3 position = mesh->vertices.data[pointIndex];
                 if (firstCorner != UFBX_NO_INDEX && mesh->skinned_position.exists)
                     position = ufbx_get_vertex_vec3(&mesh->skinned_position, firstCorner);
+                if (generateBlendShapeAnimation && frame < blendShapeFrames.size() &&
+                    blendShapeFrames[frame].meshIndex == meshIndex)
+                {
+                    if (mesh->skin_deformers.count)
+                    {
+                        fbxLoadError = "Automatic FBX blend-shape animation is unsupported for skinned meshes.";
+                        return false;
+                    }
+                    const ufbx_vec3 offset = ufbx_get_blend_shape_vertex_offset(
+                        blendShapeFrames[frame].shape, pointIndex);
+                    position.x += offset.x;
+                    position.y += offset.y;
+                    position.z += offset.z;
+                }
                 if (mesh->skinned_is_local)
                     position = ufbx_transform_position(&node->geometry_to_world, position);
                 for (unsigned int axis = 0; axis < 3; ++axis)

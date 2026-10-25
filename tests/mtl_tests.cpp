@@ -162,6 +162,44 @@ void testEnabledCompressionAlwaysUsesFourBits()
     delete [] texture.pixel;
 }
 
+void testPaletteDoesNotDependOnPixelOrder()
+{
+    texture_t forward = {};
+    texture_t reversed = {};
+    const unsigned int colorCount = 64;
+    std::vector<uint16_t> colors;
+    std::vector<uint16_t> pixels;
+    for (unsigned int color = 0; color < colorCount; ++color)
+    {
+        const uint16_t rgb = C_RGB((color * 7) & 31, (color * 13) & 31, (color * 19) & 31);
+        colors.push_back(rgb);
+        for (unsigned int repeat = 0; repeat < 1 + color % 3; ++repeat) pixels.push_back(rgb);
+    }
+    forward.width = reversed.width = static_cast<unsigned int>(pixels.size());
+    forward.height = reversed.height = 1;
+    forward.pixel = new pixel_t[pixels.size()]();
+    reversed.pixel = new pixel_t[pixels.size()]();
+    for (size_t pixel = 0; pixel < pixels.size(); ++pixel)
+    {
+        forward.pixel[pixel].rgb = pixels[pixel];
+        reversed.pixel[pixel].rgb = pixels[pixels.size() - 1 - pixel];
+    }
+
+    specialOption |= 1;
+    assert(FillPalette(&forward, -1) == 1);
+    assert(FillPalette(&reversed, -1) == 1);
+    for (unsigned int color = 0; color < 16; ++color)
+        assert(forward.clut[color] == reversed.clut[color]);
+    for (size_t pixel = 0; pixel < pixels.size(); ++pixel)
+    {
+        assert(forward.pixel[pixel].palette_idx < 16);
+        assert(reversed.pixel[pixel].palette_idx < 16);
+    }
+
+    delete [] forward.pixel;
+    delete [] reversed.pixel;
+}
+
 void testGeneratedTextureDimensionLimits()
 {
     model_t mesh = {};
@@ -215,11 +253,33 @@ void testGeneratedTextureDimensionLimits()
     assert(model.texture[2].width == 512);
     assert(model.texture[2].height == 256);
 
+    texture_t detailedSource = {};
+    detailedSource.name = "surface_resize_source";
+    detailedSource.width = 64;
+    detailedSource.height = 32;
+    detailedSource.colorDepth = COL_16;
+    detailedSource.pixel = new pixel_t[detailedSource.width * detailedSource.height]();
+    for (unsigned int pixel = 0; pixel < detailedSource.width * detailedSource.height; ++pixel)
+    {
+        const uint16_t color = pixel % detailedSource.width < 32 ? C_RGB(31, 0, 0) : C_RGB(0, 0, 31);
+        detailedSource.pixel[pixel].rgb = color;
+        detailedSource.pixel[pixel].palette_idx = pixel % detailedSource.width < 32 ? 0 : 1;
+    }
+    detailedSource.clut[0] = C_RGB(31, 0, 0);
+    detailedSource.clut[1] = C_RGB(0, 0, 31);
+    specialOption = 1;
+    assert(createTextureAtMaxDimension(&face, &model, detailedSource, 16));
+    assert(model.texture[3].width == 16 && model.texture[3].height == 8);
+    assert(model.texture[3].colorDepth == COL_16);
+    assert(model.texture[3].pixel[0].rgb == detailedSource.pixel[0].rgb);
+    assert(model.texture[3].pixel[8].rgb == detailedSource.pixel[32].rgb);
+
     textureBakeEnabled = false;
     for (unsigned int texture = 0; texture < model.nbTextures; ++texture)
         delete [] model.texture[texture].pixel;
     delete [] model.texture;
     delete [] source.pixel;
+    delete [] detailedSource.pixel;
     maxGeneratedTextureWidth = oldWidthLimit;
     maxGeneratedTextureHeight = oldHeightLimit;
     specialOption = oldSpecialOptions;
@@ -250,6 +310,7 @@ void testReducedBaseTexturePixels()
         atlas.pixel[pixel].a = 255;
         atlas.pixel[pixel].rgb = C_RGB(atlas.pixel[pixel].r / 8, atlas.pixel[pixel].g / 8, atlas.pixel[pixel].b / 8);
     }
+    assert(FillPalette(&atlas, -1) == 1);
     for (unsigned int row = 0; row < rows; ++row)
         for (unsigned int column = 0; column < columns; ++column)
         {
@@ -271,6 +332,10 @@ void testReducedBaseTexturePixels()
     useUV = 1;
     textureBakeEnabled = true;
     cacheAutomaticLodSourceTextures(&model, &atlas, 1);
+    texture_t cachedSource = {};
+    assert(getCachedSourceTextureForSurface(&model, 0, 0, &cachedSource));
+    assert(cachedSource.width == atlas.width && cachedSource.height == atlas.height);
+    assert(cachedSource.pixel[0].rgb == atlas.pixel[0].rgb);
     extern void createTexture(polygon_t *, animated_model_t *, const texture_t &);
     for (unsigned int face = 0; face < mesh.nbPolygon; ++face)
         createTexture(&mesh.pltbl[face], &model, atlas);
@@ -284,6 +349,8 @@ void testReducedBaseTexturePixels()
             centerX += mesh.pntbl[polygon.vertIdx[corner]].point[X] * 0.25f;
         const texture_t & texture = model.texture[polygon.texture];
         assert(texture.pixel && texture.width && texture.height);
+        for (unsigned int color = 0; color < 16; ++color)
+            assert(texture.clut[color] == atlas.clut[color]);
         for (unsigned int y = 0; y < texture.height; ++y)
             for (unsigned int x = 0; x < texture.width; ++x)
             {
@@ -296,6 +363,7 @@ void testReducedBaseTexturePixels()
                 const unsigned int atlasX = MIN(63u, static_cast<unsigned int>((topU * (1.0f - vertical) + bottomU * vertical) * 64));
                 const unsigned int atlasY = MIN(63u, static_cast<unsigned int>((topV * (1.0f - vertical) + bottomV * vertical) * 64));
                 const pixel_t & actual = texture.pixel[y * texture.width + x];
+                assert(actual.palette_idx < 16 && texture.clut[actual.palette_idx] == actual.rgb);
                 assert(actual.r == (centerX < 9.0f ? 248 : 0));
                 assert(actual.b == (centerX < 9.0f ? 0 : 248));
                 const unsigned int previousY = atlasY ? atlasY - 1 : 0;
@@ -414,6 +482,7 @@ int main()
     assert(firstLine == "mtllib missing.mtl");
     testTriangleDeduplication();
     testEnabledCompressionAlwaysUsesFourBits();
+    testPaletteDoesNotDependOnPixelOrder();
     testGeneratedTextureDimensionLimits();
     testReducedBaseTexturePixels();
     testImages();

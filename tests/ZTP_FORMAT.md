@@ -84,6 +84,11 @@ Offsets in this table are relative to modelOffset (32 in a modern file).
 | 56 | 36 | nine reserved u32, zero |
 | 92 | textureBytes | shared texture block |
 
+The bounding box covers the base vertices and all animation frames. For Z01,
+its bounds reflect the signed 8-bit coordinates after the same rounding used
+when those vertices are written; S01 bounds cover the stored fixed-point
+coordinates.
+
 After the texture block, in this exact order:
 
 1. M mesh-range records, 12 bytes each.

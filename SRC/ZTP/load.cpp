@@ -212,6 +212,48 @@ static bool readLodDirectory(animated_model_t * model, const std::vector<uint8_t
     return nextFace == bytes.size();
 }
 
+static void updateModelBoundingBox(animated_model_t * model)
+{
+    const float largest = std::numeric_limits<float>::max();
+    for (unsigned int axis = 0; axis < XYZ; ++axis)
+    {
+        model->BoxMin[axis] = largest;
+        model->BoxMax[axis] = -largest;
+    }
+
+    unsigned int frameOffset = 0;
+    for (unsigned int meshIndex = 0; meshIndex < model->nbModels; ++meshIndex)
+    {
+        model_t & mesh = model->model[meshIndex];
+        for (unsigned int axis = 0; axis < XYZ; ++axis)
+        {
+            mesh.BoxMin[axis] = largest;
+            mesh.BoxMax[axis] = -largest;
+        }
+        const auto includePoint = [&](const vertex_t & vertex)
+        {
+            for (unsigned int axis = 0; axis < XYZ; ++axis)
+            {
+                mesh.BoxMin[axis] = MIN(mesh.BoxMin[axis], vertex.point[axis]);
+                mesh.BoxMax[axis] = MAX(mesh.BoxMax[axis], vertex.point[axis]);
+                model->BoxMin[axis] = MIN(model->BoxMin[axis], vertex.point[axis]);
+                model->BoxMax[axis] = MAX(model->BoxMax[axis], vertex.point[axis]);
+            }
+        };
+        for (unsigned int point = 0; point < mesh.nbPoint; ++point)
+        {
+            includePoint(mesh.pntbl[point]);
+            for (unsigned int frame = 0; model->keyFrames && frame < model->nbFrames; ++frame)
+                if (model->keyFrames[frame].cVert)
+                    includePoint(model->keyFrames[frame].cVert[frameOffset + point]);
+        }
+        frameOffset += mesh.nbPoint;
+    }
+    for (unsigned int axis = 0; axis < XYZ; ++axis)
+        if (model->BoxMin[axis] == largest)
+            model->BoxMin[axis] = model->BoxMax[axis] = 0.0f;
+}
+
 static animated_model_t * readZTPFile(const string &filePath, bool sgl)
 {
     ifstream file(filePath.c_str(), ios::binary);
@@ -466,6 +508,7 @@ static animated_model_t * readZTPFile(const string &filePath, bool sgl)
             }
         }
         if (levels > 1 && !readLodDirectory(model, lodBlock, lodOffset, levels, wideLodIndices)) return fail();
+        updateModelBoundingBox(model);
         extern void calcLight(animated_model_t *);
         calcLight(model);
         return model;
@@ -636,6 +679,7 @@ static animated_model_t * readZTPFile(const string &filePath, bool sgl)
         destroyLoadedZTP(model);
         return NULL;
     }
+    updateModelBoundingBox(model);
     extern void calcLight(animated_model_t *);
     calcLight(model);
     return model;
@@ -1190,7 +1234,10 @@ void findScale(animated_model_t * aModel, bool allowUpscale){
        aModel->scale[j]=(float)1.0f;
     }
 
-    if (USE_SGL) return; //Not supported for now...
+    if (USE_SGL) {
+        updateModelBoundingBox(aModel);
+        return; //Not supported for now...
+    }
 
     double scale[3]={1.0f, 1.0f, 1.0f};
     double maxValue[3]={0,0,0};
@@ -1247,6 +1294,7 @@ void findScale(animated_model_t * aModel, bool allowUpscale){
             }
         }
     }
+    updateModelBoundingBox(aModel);
 }
 
 string fileOutName;
@@ -1309,32 +1357,17 @@ void rotateModelData(animated_model_t * model, int rotationX, int rotationY, int
 void translateModelData(animated_model_t * model, float translationX, float translationY, float translationZ)
 {
     const float translation[3] = {translationX, translationY, translationZ};
-    const float largest = std::numeric_limits<float>::max();
-    for (int axis = X; axis <= Z; ++axis)
-    {
-        model->BoxMin[axis] = largest;
-        model->BoxMax[axis] = -largest;
-    }
 
     unsigned int frameOffset = 0;
     for (unsigned int meshIndex = 0; meshIndex < model->nbModels; ++meshIndex)
     {
         model_t & mesh = model->model[meshIndex];
-        for (int axis = X; axis <= Z; ++axis)
-        {
-            mesh.BoxMin[axis] = largest;
-            mesh.BoxMax[axis] = -largest;
-        }
         for (unsigned int point = 0; point < mesh.nbPoint; ++point)
         {
             vertex_t & vertex = mesh.pntbl[point];
             for (int axis = X; axis <= Z; ++axis)
             {
                 vertex.point[axis] += translation[axis];
-                mesh.BoxMin[axis] = MIN(mesh.BoxMin[axis], vertex.point[axis]);
-                mesh.BoxMax[axis] = MAX(mesh.BoxMax[axis], vertex.point[axis]);
-                model->BoxMin[axis] = MIN(model->BoxMin[axis], vertex.point[axis]);
-                model->BoxMax[axis] = MAX(model->BoxMax[axis], vertex.point[axis]);
             }
         }
         for (unsigned int frame = 0; frame < model->nbFrames; ++frame)
@@ -1346,6 +1379,7 @@ void translateModelData(animated_model_t * model, float translationX, float tran
             }
         frameOffset += mesh.nbPoint;
     }
+    updateModelBoundingBox(model);
 }
 
 void LoadOBJ(string inFolder, string fileIn, float * scalefactor, animated_model_t * aModel,

@@ -1,4 +1,5 @@
 #include "../COMMON.H"
+#include <limits>
 
 int USE_SGL = 1; //For now, default option?
 
@@ -97,13 +98,46 @@ void WRITE_MDATA(ofstream * file, animated_model_t * aModel, bool preserveLoaded
         writeUint16(file, countSize);
     }
 
-    for (uint32_t i=0; i<3; i++) {
-            writeSint32(file, toFIXED(aModel->BoxMin[i]));
-            cout << (int)(aModel->BoxMin[i]) << ", ";
+    float boxMin[XYZ], boxMax[XYZ];
+    for (uint32_t axis = 0; axis < XYZ; ++axis)
+    {
+        boxMin[axis] = std::numeric_limits<float>::max();
+        boxMax[axis] = -std::numeric_limits<float>::max();
     }
-    for (uint32_t i=0; i<3; i++) {
-            writeSint32(file, toFIXED(aModel->BoxMax[i]));
-            cout << (int)(aModel->BoxMax[i]) << ", ";
+    unsigned int frameOffset = 0;
+    for (unsigned int mesh = 0; mesh < aModel->nbModels; ++mesh)
+    {
+        const model_t & part = aModel->model[mesh];
+        for (unsigned int point = 0; point < part.nbPoint; ++point)
+        {
+            const auto includePoint = [&](const vertex_t & vertex, bool animated)
+            {
+                for (unsigned int axis = 0; axis < XYZ; ++axis)
+                {
+                    float coordinate = vertex.point[axis];
+                    if (USE_SGL)
+                    {
+                        if (animated) coordinate = toFIXED4(coordinate) / 16.0f;
+                    }
+                    else
+                        coordinate = roundCVert(coordinate);
+                    boxMin[axis] = MIN(boxMin[axis], coordinate);
+                    boxMax[axis] = MAX(boxMax[axis], coordinate);
+                }
+            };
+            includePoint(part.pntbl[point], false);
+            for (unsigned int frame = 0; frame < aModel->nbFrames; ++frame)
+                includePoint(aModel->keyFrames[frame].cVert[frameOffset + point], true);
+        }
+        frameOffset += part.nbPoint;
+    }
+    for (uint32_t axis = 0; axis < XYZ; ++axis) {
+            writeSint32(file, toFIXED(boxMin[axis]));
+            cout << (int)(boxMin[axis]) << ", ";
+    }
+    for (uint32_t axis = 0; axis < XYZ; ++axis) {
+            writeSint32(file, toFIXED(boxMax[axis]));
+            cout << (int)(boxMax[axis]) << ", ";
     }
 
     if (!USE_SGL){
@@ -826,6 +860,14 @@ bool saveZTPFile(const string & path, animated_model_t * model)
     return saved;
 }
 
+bool saveZTPFileWithoutAnimations(const string & path, animated_model_t * model)
+{
+    if (!model) return false;
+    animated_model_t staticModel = *model;
+    staticModel.nbFrames = 0;
+    staticModel.keyFrames = NULL;
+    return saveZTPFile(path, &staticModel);
+}
 
 /******
 player->SPEED[Z] = AslMulFX(std::cos(player->ROTATION[Y]*conv), (player->MOVEMENT_SPEED)) +
@@ -911,5 +953,3 @@ void writePalette(animated_model_t * a)
     file << "\n};\n\n";
     file << "#endif\n\n";
 }
-
-
